@@ -1,5 +1,6 @@
 # =============================================================================
 # CERN-AI Default Configuration
+# GPU: RTX 3050 4GB VRAM (Ampere, compute 8.6)
 # =============================================================================
 
 # Data
@@ -24,14 +25,15 @@ model:
   dropout: 0.2
   num_classes: 2
 
-# Training
+# Training (tuned for RTX 3050 4GB)
 training:
   epochs: 100
-  batch_size: 32
+  batch_size: 64            # safe for 4GB VRAM with small graphs
   learning_rate: 0.001
   weight_decay: 0.0001
   patience: 15
   max_grad_norm: 1.0
+  mixed_precision: true     # FP16 saves ~40% VRAM on Ampere
 
 # Data splits
 splits:
