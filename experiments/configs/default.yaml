@@ -1,0 +1,70 @@
+# =============================================================================
+# CERN-AI Default Configuration
+# =============================================================================
+
+# Data
+data:
+  synthetic:
+    n_normal: 10000
+    n_anomaly: 1000
+    seed: 42
+    output: "data/synthetic/"
+  graphs:
+    strategy: "knn"    # knn, fully_connected, delta_r
+    k: 8               # for kNN
+    delta_r: 1.5       # for delta_r strategy
+    output: "data/graphs/"
+
+# Model architecture
+model:
+  input_dim: 11        # 5 (one-hot type) + 6 (pt, eta, phi, mass, charge, energy)
+  hidden_dim: 64
+  latent_dim: 32
+  num_layers: 3
+  dropout: 0.2
+  num_classes: 2
+
+# Training
+training:
+  epochs: 100
+  batch_size: 32
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  patience: 15
+  max_grad_norm: 1.0
+
+# Data splits
+splits:
+  train: 0.70
+  val: 0.15
+  test: 0.15
+  seed: 42
+
+# Anomaly detection
+anomaly:
+  threshold_method: "percentile"  # percentile or sigma
+  threshold_percentile: 95
+  threshold_sigma: 3.0
+  top_k: 100
+
+# Benchmark
+benchmark:
+  models:
+    - "mlp"
+    - "cnn"
+    - "gcn"
+    - "graphsage"
+    - "gat"
+    - "physicsnemo"
+  epochs: 50
+
+# Output
+output:
+  checkpoints: "checkpoints/"
+  results: "results/"
+  figures: "reports/figures/"
+
+# MLflow
+mlflow:
+  enabled: false
+  experiment: "cern-ai"

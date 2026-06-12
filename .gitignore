@@ -36,10 +36,9 @@ data/
 *.pkl
 *.pickle
 
-# Model artifacts
-models/
-checkpoints/
-*.pt
+# Model artifacts (saved weights, not source code)
+/models/
+/checkpoints/
 *.pth
 *.onnx
 
