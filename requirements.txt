@@ -1,0 +1,17 @@
+# =============================================================================
+# CERN-AI Requirements
+# =============================================================================
+# Phase: Day 0 — Environment Setup
+# Next: uproot, awkward-array (Week 3), torch-geometric (Month 2)
+# =============================================================================
+
+# Core scientific Python
+torch
+torchvision
+numpy
+pandas
+scipy
+matplotlib
+
+# Notebooks
+jupyterlab
