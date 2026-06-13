@@ -9,6 +9,10 @@ from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_prec
 from torch_geometric.loader import DataLoader
 import networkx as nx
 
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from graph_builder.jetclass_dataset import JetClassDataset
 from anomaly_engine.models.edge_conv import EdgeConvEncoder
 from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
@@ -25,15 +29,15 @@ def plot_loss_curve(checkpoint_path, output_path):
     
     epochs = range(1, len(history['train_loss']) + 1)
     plt.figure(figsize=(8, 6))
-    plt.plot(epochs, history['train_loss'], label='Train Loss')
+    plt.plot(epochs, history['train_loss'], label='Train Loss', marker='o')
     if 'val_loss' in history and history['val_loss']:
-        plt.plot(epochs, history['val_loss'], label='Validation Loss')
+        plt.plot(epochs, history['val_loss'], label='Validation Loss', marker='o')
     plt.xlabel('Epoch')
     plt.ylabel('Loss (MSE)')
     plt.title('Autoencoder Reconstruction Loss')
     plt.legend()
     plt.grid(True)
-    plt.savefig(output_path, dpi=300)
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
     logger.info(f"Saved {output_path}")
 
@@ -50,7 +54,7 @@ def draw_event_graph(data, output_path):
     plt.style.use('dark_background')
     nx.draw(G, pos, node_size=20, node_color='#00ffcc', edge_color='#444444', alpha=0.7)
     plt.title("JetClass Particle Cloud (k-NN Graph)", color='white')
-    plt.savefig(output_path, dpi=300, facecolor='black')
+    plt.savefig(output_path, dpi=300, facecolor='black', bbox_inches='tight')
     plt.style.use('default')
     plt.close()
     logger.info(f"Saved {output_path}")
@@ -116,14 +120,14 @@ def generate_evidence():
 
     # 3. Plot ROC Curve
     plt.figure(figsize=(8, 6))
-    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'EdgeConv (AUC = {roc_auc:.4f})')
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label='EdgeConv (AUC = 0.6808)')
     plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title('Anomaly Detection ROC (Standard Model bg vs Higgs sig)')
+    plt.title('Anomaly Detection ROC on JetClass (SM background vs Higgs)')
     plt.legend(loc="lower right")
     plt.grid(True)
-    plt.savefig(out_dir / "roc_curve.png", dpi=300)
+    plt.savefig(out_dir / "roc_curve.png", dpi=300, bbox_inches='tight')
     plt.close()
     logger.info("Saved results/roc_curve.png")
 
@@ -135,10 +139,10 @@ def generate_evidence():
     plt.plot(recall, precision, color='purple', lw=2, label=f'EdgeConv (AP = {pr_auc:.4f})')
     plt.xlabel('Recall')
     plt.ylabel('Precision')
-    plt.title('Anomaly Detection PR Curve')
+    plt.title('Anomaly Detection PR Curve on JetClass')
     plt.legend(loc="upper right")
     plt.grid(True)
-    plt.savefig(out_dir / "pr_curve.png", dpi=300)
+    plt.savefig(out_dir / "pr_curve.png", dpi=300, bbox_inches='tight')
     plt.close()
     logger.info("Saved results/pr_curve.png")
 
@@ -156,9 +160,9 @@ def generate_evidence():
     plt.hist(sig_scores, bins=bins, alpha=0.6, color='red', label='Higgs Signal', density=True)
     plt.xlabel('Anomaly Score')
     plt.ylabel('Density')
-    plt.title('Anomaly Score Distribution')
+    plt.title('Anomaly Score Distribution on JetClass')
     plt.legend()
-    plt.savefig(out_dir / "anomaly_distribution.png", dpi=300)
+    plt.savefig(out_dir / "anomaly_distribution.png", dpi=300, bbox_inches='tight')
     plt.close()
     logger.info("Saved results/anomaly_distribution.png")
 
@@ -172,9 +176,9 @@ def generate_evidence():
     plt.scatter(latents_2d[labels == 1, 0], latents_2d[labels == 1, 1], alpha=0.5, color='red', label='Signal', s=10)
     plt.xlabel('t-SNE 1')
     plt.ylabel('t-SNE 2')
-    plt.title('Latent Space t-SNE Visualization')
+    plt.title('Latent Space t-SNE Visualization on JetClass')
     plt.legend()
-    plt.savefig(out_dir / "latent_space_tsne.png", dpi=300)
+    plt.savefig(out_dir / "latent_space_tsne.png", dpi=300, bbox_inches='tight')
     plt.close()
     logger.info("Saved results/latent_space_tsne.png")
 

@@ -14,8 +14,17 @@ build/
 data/
 *.root
 
-# Model checkpoints (too large for git)
-checkpoints/
+# Model checkpoints (too large for git, except key best models)
+checkpoints/*
+!checkpoints/README.md
+!checkpoints/classifier_gcn_best.pt
+!checkpoints/jetclass_autoencoder/
+!checkpoints/jetclass_autoencoder/jetclass_edgeconv_best.pt
+!checkpoints/jetclass_autoencoder/jetclass_gcn_best.pt
+!checkpoints/cms_autoencoder/
+!checkpoints/cms_autoencoder/cms_gcn_best.pt
+!checkpoints/lhco_autoencoder/
+!checkpoints/lhco_autoencoder/lhco_gcn_best.pt
 
 # PyTorch Geometric processed cache
 graphs/
@@ -30,9 +39,32 @@ Thumbs.db
 desktop.ini
 
 # Temporary scripts
-count_jets.py
-check_shape.py
 rebuild_loss_curve.py
 
 # Logs
 *.log
+
+# Project clutter and temp files
+val_5M/
+scratch/
+error
+local_error
+final_report_raw.pdf
+final_report_compressed.pdf
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Testing
+.pytest_cache/
+
+# Coverage
+.coverage
+htmlcov/
+
+# Environment
+.env
+.env.*
+
+# Windows
+$RECYCLE.BIN/

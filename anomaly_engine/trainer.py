@@ -436,7 +436,7 @@ class Trainer:
     def _load_checkpoint_with_batch(self, filename: str) -> tuple[int, int]:
         path = self.checkpoint_dir / filename
         if path.exists():
-            checkpoint = torch.load(path, map_location=self.device)
+            checkpoint = torch.load(path, map_location=self.device, weights_only=False)
             self.model.load_state_dict(checkpoint["model_state_dict"])
             
             if "optimizer_state_dict" in checkpoint:

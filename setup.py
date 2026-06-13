@@ -3,13 +3,13 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="cern-ai",
+    name="CERN-AI-HEP",
     version="0.1.0",
     description="Graph Neural Network Based Anomaly Detection for LHC Events",
     author="Abhishek",
     author_email="ak612520208365@gmail.com",
     packages=find_packages(),
-    python_requires=">=3.11",
+    python_requires=">=3.10",
     install_requires=[
         "torch>=2.0",
         "torch-geometric>=2.4",

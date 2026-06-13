@@ -32,7 +32,7 @@ class JetClassIterableDataset(IterableDataset):
         root_file_paths: List[str],
         k_neighbors: int = 8,
         max_particles: int = 128,
-        chunk_size: int = 50000,
+        chunk_size: int = 10000,
         start_batch: int = 0,
         batch_size: int = 2048,
     ):
@@ -91,46 +91,33 @@ class JetClassIterableDataset(IterableDataset):
                     # Iterate in chunks to save RAM
                     for arrays in tree.iterate(PARTICLE_FEATURES + LABEL_BRANCHES, step_size=self.chunk_size):
                         n_jets = len(arrays)
+                        print(f"      [Iterable] Read chunk of {n_jets} jets from disk. Padding arrays...")
+                        lengths = ak.to_numpy(ak.num(arrays["part_px"]))
                         
-                        # Handle resuming/skipping
-                        if jets_to_skip >= n_jets:
-                            jets_to_skip -= n_jets
-                            continue
+                        padded_feats = []
+                        for feat in PARTICLE_FEATURES:
+                            padded = ak.fill_none(ak.pad_none(arrays[feat], self.max_particles, clip=True), 0.0)
+                            padded_feats.append(ak.to_numpy(padded).astype(np.float32))
                             
-                        # If we partially skip within this chunk
-                        start_offset = 0
-                        if jets_to_skip > 0:
-                            start_offset = jets_to_skip
-                            jets_to_skip = 0
-
+                        print(f"      [Iterable] Padded. Stacking {len(PARTICLE_FEATURES)} features...")
+                        # Stack all features into a single dense block [n_jets, max_particles, 16]
+                        node_feats_all = np.stack(padded_feats, axis=-1)
+                        print(f"      [Iterable] Stacked into {node_feats_all.shape}. Yielding...")
+                        
                         is_qcd = ak.to_numpy(arrays["label_QCD"]).astype(bool)
                         binary_labels = (~is_qcd).astype(np.int64)
 
-                        for i in range(start_offset, n_jets):
-                            node_feats = []
-                            for feat_name in PARTICLE_FEATURES:
-                                col = ak.to_numpy(arrays[feat_name][i]).astype(np.float32)
-                                node_feats.append(col)
-                            
-                            node_feats = np.stack(node_feats, axis=-1)
-                            mask = np.any(node_feats != 0, axis=-1)
-                            node_feats = node_feats[mask]
-                            
-                            n_particles = len(node_feats)
-                            if n_particles < 2:
+                        for i in range(n_jets):
+                            length = min(lengths[i], self.max_particles)
+                            if length < 2:
                                 continue
                                 
-                            if n_particles > self.max_particles:
-                                node_feats = node_feats[:self.max_particles]
-                                n_particles = self.max_particles
-                                
-                            x = torch.tensor(node_feats, dtype=torch.float)
-                            eta_phi = x[:, 4:6].contiguous()
-                            k = min(self.k_neighbors, n_particles - 1)
-                            edge_index = self._build_knn_graph(eta_phi, k)
+                            # Zero-copy slicing of the dense numpy block
+                            x = torch.from_numpy(node_feats_all[i, :length, :])
                             y = torch.tensor([binary_labels[i]], dtype=torch.long)
                             
-                            yield Data(x=x, edge_index=edge_index, y=y)
+                            # We omit edge_index here! We will build it natively on the GPU!
+                            yield Data(x=x, y=y)
                             
             except Exception as e:
                 logger.error(f"Error reading {fpath}: {e}")

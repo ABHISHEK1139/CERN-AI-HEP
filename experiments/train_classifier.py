@@ -41,7 +41,7 @@ def prepare_data(config: dict, data_dir: str = None):
 
     if graphs_file.exists():
         logging.info(f"Loading existing graphs from {graphs_file}")
-        graphs = torch.load(graphs_file)
+        graphs = torch.load(graphs_file, weights_only=False)
     else:
         logging.info("No graphs found. Generating synthetic data...")
 
@@ -91,6 +91,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size")
     parser.add_argument("--config", type=str, default=None, help="Config YAML path")
     parser.add_argument("--device", type=str, default="auto", help="Device")
+    parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoint")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -138,6 +139,8 @@ def main():
         learning_rate=train_config["learning_rate"],
         weight_decay=train_config["weight_decay"],
         patience=train_config["patience"],
+        max_grad_norm=train_config["max_grad_norm"],
+        checkpoint_dir=config["output"]["checkpoints"],
         use_mlflow=config["mlflow"]["enabled"],
     )
 
@@ -145,6 +148,7 @@ def main():
         train_loader, val_loader,
         epochs=train_config["epochs"],
         run_name=f"classifier_{args.model}",
+        resume=args.resume,
     )
 
     # Evaluate

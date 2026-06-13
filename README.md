@@ -1,75 +1,202 @@
-# CERN AI for Science: Anomaly Detection in High Energy Physics
+# CERN-AI-HEP
 
-This repository implements an unsupervised anomaly detection pipeline for High Energy Physics (HEP) collision events using advanced Graph Neural Networks (GNNs). The project was built with the goal of identifying extremely rare "new physics" signatures (such as Higgs boson decays) buried within massive datasets of Standard Model background processes.
+Graph Neural Network based anomaly detection pipeline for High Energy Physics collision events.
 
-## 🚀 Scientific Motivation
+Built using:
+- PyTorch Geometric
+- EdgeConv (Dynamic Graph CNN)
+- CERN CMS Open Data
+- JetClass Dataset
+- NVIDIA PhysicsNeMo
 
-At the Large Hadron Collider (LHC), billions of particle collisions occur every second. The vast majority of these are well-understood Standard Model processes (e.g., QCD multijet or electroweak $Z \rightarrow \nu\nu$ events). Anomalous signals—which may represent undiscovered particles or rare decays—are incredibly sparse.
+**Best JetClass AUROC:** 0.6808  
+**Dataset Scale:** 6 Million Jets  
+**Hardware:** RTX 3050 4GB  
 
-Traditional grid-based CNNs struggle with the sparse, irregular geometry of particle jets. This project models collision events as **3D Particle Clouds** and applies an **EdgeConv Graph Autoencoder** to dynamically learn topological representations, enabling the unsupervised isolation of out-of-distribution physics events.
+## 3D Particle Cloud Topologies ($\Delta\eta$-$\Delta\phi$ Plane)
 
-## 📊 Datasets Evaluated
+| Standard Model Background | Higgs Boson Anomaly |
+|:---:|:---:|
+| <img src="docs/bg_event.png" width="400" alt="Background Event"> | <img src="docs/sig_event.png" width="400" alt="Higgs Anomaly"> |
 
-The pipeline has been robustly evaluated across three environments:
-1. **LHCO R&D Benchmark**: Used for baseline architecture validation on simulated dijet events.
-2. **CMS Open Data (Run 2)**: NanoAOD formats derived directly from authentic CERN CMS detector interactions, proving the robustness of the graph construction engine.
-3. **JetClass Dataset (100 Million Jets)**: Scaled to a massive, highly-complex simulated dataset containing $Z \rightarrow \nu\nu$ backgrounds and various anomalous decays (Top, W, Z, Higgs).
+*Red nodes indicate particles with high reconstruction error flagged by the unsupervised autoencoder.*
 
-## 🧠 Architecture: EdgeConv vs Static GCN
+---
+
+## Scientific Motivation
+
+Large Hadron Collider experiments generate billions of collision events. Rare physics signatures are buried inside overwhelming Standard Model backgrounds. This project investigates whether Graph Neural Networks can prioritize unusual collision-event candidates for physicist review without relying on explicit anomaly labels.
+
+---
+
+## Architecture Diagram
 
 ```mermaid
 graph TD
-    A["CMS ROOT/NanoAOD"] -->|"uproot streaming"| B["Particle Extraction (pt, eta, phi)"]
-    B -->|"PyTorch Geometric"| C["kNN Graph Construction"]
-    C -->|"k=8 nearest neighbors"| D["EdgeConv Encoder"]
-    D -->|"Dynamic Topologies"| E["Latent Space (z)"]
-    E -->|"PhysicsNeMo / MLP"| F["Decoder"]
-    F -->|"Particle Features"| G["Reconstruction Error (MSE)"]
-    G -->|"Thresholding"| H["Anomaly Score"]
-    
-    style A fill:#f9d0c4,stroke:#333,stroke-width:2px
-    style H fill:#d4e157,stroke:#333,stroke-width:2px
+    A["ROOT/NanoAOD"] --> B["Particle Extraction"]
+    B --> C["Graph Construction"]
+    C --> D["EdgeConv Encoder"]
+    D --> E["Latent Space"]
+    E --> F["Decoder"]
+    F --> G["Anomaly Score"]
 ```
 
-Initially, we implemented a baseline Graph Convolutional Network (GCN) using fixed $k$-Nearest Neighbor ($k$-NN) graphs based on $\Delta\eta-\Delta\phi$ coordinates. This baseline failed to capture the dynamically evolving substructures within complex jets (AUROC ~0.43 on JetClass).
+---
 
-To solve this, we migrated the autoencoder to an **EdgeConv** (Dynamic Graph CNN) architecture. EdgeConv dynamically recalculates the $k$-NN graph in the *latent space* at each layer. This allows the network to cluster particles based on semantic, high-dimensional features rather than rigid physical proximity.
+## Datasets
 
-### Training Paradigm
-- **Input**: Graphs with up to 128 particles, constructed via $k$-NN ($k=8$).
-- **Objective**: Unsupervised reconstruction of particle features (Mean Squared Error).
-- **Training Data**: 1,000,000 $Z \rightarrow \nu\nu$ (Standard Model) jets. The model *never* sees signal events during training.
-- **Inference**: Signal events (e.g., Higgs decays) yield high reconstruction MSE, naturally flagging them as anomalies.
+### LHCO R&D
+**Purpose:**
+- Initial benchmark
+- Graph validation
 
-## 📈 Results
+### CMS Open Data
+**Source:**
+- CERN CMS Run-2 NanoAOD
 
-The transition to a dynamic graph architecture yielded substantial improvements across the board.
+**Purpose:**
+- Real detector validation
 
-| Dataset | Model Architecture | AUROC |
-| :--- | :--- | :--- |
-| **LHCO** | Baseline GCN | 0.7284 |
-| **JetClass** | Baseline GCN | ~0.4300 |
-| **JetClass** | **EdgeConv** | **0.6661** |
+### JetClass
+**Subset:**
+- 6 Million Jets
 
-*Note: Final AUROC is generated using a 5-Million Jet validation subset. Precision-Recall curves and Latent t-SNE visualizations are available in the `results/` directory.*
+**Background:**
+- 1M Z -> nu nu jets
 
-## 💻 Hardware & Infrastructure
+**Signal:**
+- 5M Higgs / Top / W / Z decays
 
-To accommodate local hardware constraints (NVIDIA RTX 3050 4GB), the PyTorch Geometric training loop utilizes:
-- **Streaming IterableDatasets** powered by `uproot` to prevent RAM saturation.
-- Heavy optimization via large chunk buffering (`chunk_size=50,000`) and massive batched tensor evaluation (`batch_size=2048`).
-- An **NVIDIA PhysicsNeMo** integration proof-of-concept successfully swaps the PyTorch MLP decoder for a Modulus model, achieving a **1.62× inference speedup** natively on the RTX 3050, demonstrating scaling readiness for multi-GPU national lab clusters.
+Used for large-scale anomaly detection experiments.
 
-## 🛠 Usage & Reproducibility
+---
 
-1. **Install Dependencies**:
+## Results
+
+| Model | Parameters | AUROC |
+|---------|---------|---------|
+| MLP | 6.3k | 0.6233 |
+| GCN | 37k | 0.6541 |
+| EdgeConv (1 epoch) | 37k | 0.6536 |
+| EdgeConv (5 epochs) | 37k | 0.6628 |
+| EdgeConv (50 epochs) | 37k | 0.6808 |
+
+---
+
+## Training Saturation Analysis
+
+The EdgeConv autoencoder achieved 0.6628 AUROC after only 5 epochs and 0.6808 AUROC after 50 epochs. Thus, over 97% of the final performance was obtained during the initial training phase.
+
+| Epochs | AUROC |
+|---------|---------|
+| 5 | 0.6628 |
+| 50 | 0.6808 |
+
+The remaining 45 epochs produced only a modest improvement of 0.018 AUROC, indicating that the model converges rapidly on the JetClass benchmark. These results suggest that future improvements are likely to depend more on representational capacity, feature engineering, or architectural design than on extending training duration alone.
+
+---
+
+## Figures
+
+### Training Curve
+<img src="docs/loss_curve.png" width="600" alt="Training Curve">
+
+### Anomaly Score Distribution
+<img src="docs/anomaly_distribution.png" width="600" alt="Anomaly Distribution">
+
+### ROC Curve
+<img src="docs/roc_curve.png" width="600" alt="ROC Curve">
+
+### PR Curve
+<img src="docs/pr_curve.png" width="600" alt="PR Curve">
+
+### Latent Space
+<img src="docs/latent_space.png" width="600" alt="Latent Space">
+
+---
+
+## NVIDIA PhysicsNeMo Integration
+
+A hybrid PyTorch Geometric + PhysicsNeMo implementation was benchmarked.
+
+| Pipeline | Latency |
+|------------|-----------|
+| PyG | 2.79 ms |
+| PhysicsNeMo Hybrid | 1.73 ms |
+
+**Speedup:** 1.62x
+
+---
+
+## CMS Open Data Validation
+
+The complete pipeline was validated on real CMS NanoAOD detector events.
+
+**Capabilities:**
+- ROOT loading
+- Particle extraction
+- Graph construction
+- Inference
+
+This demonstrates applicability beyond synthetic benchmarks.
+
+<img src="docs/event_graph.png" width="600" alt="CMS Open Data Validation - Event Graph">
+
+---
+
+## Hardware
+
+| Component | Value |
+|------------|------------|
+| CPU | Intel i5 12th Gen |
+| GPU | RTX 3050 4GB |
+| RAM | 16 GB |
+| Dataset | 6M Jets |
+| Training Time | ~45 Hours |
+
+---
+
+## Repository Structure
+
+```text
+CERN-AI-HEP/
+|-- event_ingestion/
+|-- graph_builder/
+|-- anomaly_engine/
+|-- physicsnemo_integration/
+|-- experiments/
+|-- docs/
+`-- checkpoints/
+```
+
+---
+
+## Reproduce
+
+### Quick smoke test
+
+Use the small synthetic configuration to verify that data generation, graph construction, training, and evaluation run end-to-end:
+
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-pip install torch_geometric uproot networkx matplotlib scikit-learn
+git clone https://github.com/ABHISHEK1139/CERN-AI-HEP.git
+cd CERN-AI-HEP
+pip install -r requirements.txt
+python experiments/train_classifier.py --config experiments/configs/smoke.yaml --model gcn --epochs 2 --device cpu
 ```
 
-2. **Run Inference & Evaluation**:
+### Full JetClass benchmark
+
+The large-scale result requires the JetClass files and is intended for a longer GPU run:
+
 ```bash
-# Uses the pre-trained jetclass_edgeconv_best.pt to generate PR/ROC curves
-python experiments/evaluate_comprehensive.py
+python experiments/run_6m_ablation.py
 ```
+
+---
+
+## Future Work
+
+- Full 100M JetClass Training
+- ATLAS Open Data Support
+- Web dashboard polish and packaged demo data
+- Multi-GPU Scaling
