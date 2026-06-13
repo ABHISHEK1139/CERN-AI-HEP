@@ -91,6 +91,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size")
     parser.add_argument("--config", type=str, default=None, help="Config YAML path")
     parser.add_argument("--device", type=str, default="auto", help="Device")
+    parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoint")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -145,6 +146,7 @@ def main():
         train_loader, val_loader,
         epochs=train_config["epochs"],
         run_name=f"classifier_{args.model}",
+        resume=args.resume,
     )
 
     # Evaluate

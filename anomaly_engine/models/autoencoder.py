@@ -101,13 +101,9 @@ class GraphAutoencoder(nn.Module):
         # Reconstruction loss
         per_node_loss = F.mse_loss(x_recon, x, reduction="none").mean(dim=-1)  # [N]
 
-        # Aggregate per graph
-        batch_size = batch.max().item() + 1
-        per_graph_loss = torch.zeros(batch_size, device=x.device)
-        for b in range(batch_size):
-            mask = batch == b
-            if mask.any():
-                per_graph_loss[b] = per_node_loss[mask].mean()
+        # Aggregate per graph using efficient scatter
+        from torch_geometric.utils import scatter
+        per_graph_loss = scatter(per_node_loss, batch, reduce='mean')
 
         loss = per_graph_loss.mean()
 

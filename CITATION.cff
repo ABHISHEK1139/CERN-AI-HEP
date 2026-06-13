@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: "Kumar"
+    given-names: "Abhishek"
+title: "CERN-AI: Graph Neural Network Anomaly Detection for High Energy Physics"
+version: 1.0.0
+date-released: 2026-06-14
+url: "https://github.com/ak612/cern-ai"
