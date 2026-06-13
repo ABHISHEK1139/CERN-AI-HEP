@@ -1,63 +1,38 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
+*.pyo
 *.egg-info/
 dist/
 build/
 *.egg
-.eggs/
 
-# Virtual environments
+# Virtual Environment
 .venv/
-venv/
-env/
-conda-env/
 
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb_metadata/
+# Data files (too large for git)
+data/
+*.root
+
+# Model checkpoints (too large for git)
+checkpoints/
+
+# PyTorch Geometric processed cache
+graphs/
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
-
-# Data — never commit raw CERN data
-data/
-*.root
-*.hdf5
-*.h5
-*.parquet
-*.feather
-*.pkl
-*.pickle
-
-# Model artifacts (saved weights, not source code)
-/models/
-/checkpoints/
-*.pth
-*.onnx
-
-# MLflow
-mlruns/
-mlartifacts/
-
-# Logs
-logs/
-*.log
-
-# Docker
-.docker/
 
 # OS
 .DS_Store
 Thumbs.db
-Desktop.ini
+desktop.ini
 
-# Experiment outputs (keep reports/, not raw outputs)
-outputs/
-wandb/
+# Temporary scripts
+count_jets.py
+check_shape.py
+rebuild_loss_curve.py
+
+# Logs
+*.log

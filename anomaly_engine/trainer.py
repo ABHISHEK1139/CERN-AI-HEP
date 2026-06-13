@@ -129,6 +129,7 @@ class Trainer:
         val_loader: DataLoader,
         epochs: int = 100,
         run_name: str = "classifier",
+        resume: bool = False,
     ) -> Dict[str, Any]:
         """
         Train a graph classifier.
@@ -138,6 +139,7 @@ class Trainer:
             val_loader: Validation DataLoader.
             epochs: Maximum epochs.
             run_name: Name for this training run.
+            resume: Whether to resume from the latest checkpoint.
 
         Returns:
             Training history dict.
@@ -155,7 +157,11 @@ class Trainer:
 
         logger.info(f"Training classifier for {epochs} epochs...")
 
-        for epoch in range(1, epochs + 1):
+        start_epoch = 0
+        if resume:
+            start_epoch = self._load_checkpoint(f"{run_name}_latest.pt")
+
+        for epoch in range(start_epoch + 1, epochs + 1):
             # Train
             train_loss, train_acc = self._train_epoch_classifier(train_loader, criterion)
 
@@ -188,12 +194,15 @@ class Trainer:
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
                 self.epochs_without_improvement = 0
-                self._save_checkpoint(f"{run_name}_best.pt")
+                self._save_checkpoint(f"{run_name}_best.pt", epoch)
             else:
                 self.epochs_without_improvement += 1
                 if self.epochs_without_improvement >= self.patience:
                     logger.info(f"Early stopping at epoch {epoch}")
                     break
+                    
+            # Always save latest for resumable training
+            self._save_checkpoint(f"{run_name}_latest.pt", epoch)
 
         self._end_mlflow()
         self._load_checkpoint(f"{run_name}_best.pt")
@@ -253,6 +262,8 @@ class Trainer:
         val_loader: DataLoader,
         epochs: int = 100,
         run_name: str = "autoencoder",
+        resume: bool = False,
+        save_steps: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Train a graph autoencoder (unsupervised).
@@ -262,6 +273,7 @@ class Trainer:
             val_loader: Validation DataLoader.
             epochs: Maximum epochs.
             run_name: Name for this training run.
+            resume: Whether to resume from the latest checkpoint.
 
         Returns:
             Training history dict.
@@ -278,8 +290,29 @@ class Trainer:
 
         logger.info(f"Training autoencoder for {epochs} epochs...")
 
-        for epoch in range(1, epochs + 1):
-            train_loss = self._train_epoch_autoencoder(train_loader)
+        start_epoch = 0
+        start_batch = 0
+        if resume:
+            start_epoch, start_batch = self._load_checkpoint_with_batch(f"{run_name}_latest.pt")
+            if start_batch > 0:
+                logger.info(f"Resuming within epoch {start_epoch + 1} at batch {start_batch}")
+                # Tell IterableDataset to skip
+                if hasattr(train_loader.dataset, 'start_idx'):
+                    train_loader.dataset.start_idx = start_batch * train_loader.batch_size
+
+        for epoch in range(start_epoch + 1, epochs + 1):
+            train_loss = self._train_epoch_autoencoder(
+                train_loader, 
+                epoch=epoch, 
+                run_name=run_name, 
+                save_steps=save_steps, 
+                start_batch=start_batch if epoch == start_epoch + 1 else 0
+            )
+            # Reset start_batch and start_idx after first epoch
+            start_batch = 0
+            if hasattr(train_loader.dataset, 'start_idx'):
+                train_loader.dataset.start_idx = 0
+            
             val_loss = self._eval_epoch_autoencoder(val_loader)
 
             self.scheduler.step(val_loss)
@@ -303,24 +336,40 @@ class Trainer:
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
                 self.epochs_without_improvement = 0
-                self._save_checkpoint(f"{run_name}_best.pt")
+                self._save_checkpoint(f"{run_name}_best.pt", epoch)
             else:
                 self.epochs_without_improvement += 1
                 if self.epochs_without_improvement >= self.patience:
                     logger.info(f"Early stopping at epoch {epoch}")
                     break
+                    
+            self._save_checkpoint(f"{run_name}_latest.pt", epoch)
 
         self._end_mlflow()
         self._load_checkpoint(f"{run_name}_best.pt")
 
         return self.history
 
-    def _train_epoch_autoencoder(self, loader):
+    def _train_epoch_autoencoder(self, loader, epoch: int = 0, run_name: str = "", save_steps: Optional[int] = None, start_batch: int = 0):
         self.model.train()
         total_loss = 0
         total = 0
 
-        for data in loader:
+        # Create progress bar if save_steps is used (likely a large dataset)
+        pbar = None
+        if save_steps is not None:
+            try:
+                total_batches = len(loader)
+            except TypeError:
+                total_batches = None
+            pbar = tqdm(total=total_batches, desc=f"Epoch {epoch}")
+
+        for batch_idx, data in enumerate(loader):
+            # Skip if we are resuming an IterableDataset which hasn't manually skipped
+            if batch_idx < start_batch and not isinstance(loader.dataset, torch.utils.data.IterableDataset):
+                if pbar is not None: pbar.update(1)
+                continue
+
             data = data.to(self.device)
             self.optimizer.zero_grad()
 
@@ -334,6 +383,19 @@ class Trainer:
             total_loss += loss.item() * data.num_graphs
             total += data.num_graphs
 
+            if pbar is not None:
+                pbar.update(1)
+                pbar.set_postfix({"loss": total_loss / total})
+
+            # Intra-epoch checkpointing
+            if save_steps and (batch_idx + 1) % save_steps == 0:
+                logger.info(f"Saving intra-epoch checkpoint at batch {batch_idx + 1}...")
+                self._save_checkpoint(f"{run_name}_latest.pt", epoch, batch_idx + 1)
+
+        if pbar is not None:
+            pbar.close()
+
+        if total == 0: return float('inf') # Prevent div by zero on empty epochs
         return total_loss / total
 
     @torch.no_grad()
@@ -354,17 +416,40 @@ class Trainer:
     # Checkpointing
     # ----------------------------------------------------------------
 
-    def _save_checkpoint(self, filename: str):
+    def _save_checkpoint(self, filename: str, epoch: int = 0, batch_idx: int = 0):
         path = self.checkpoint_dir / filename
         torch.save({
+            "epoch": epoch,
+            "batch_idx": batch_idx,
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
+            "scheduler_state_dict": self.scheduler.state_dict(),
             "best_val_loss": self.best_val_loss,
+            "history": self.history,
+            "epochs_without_improvement": self.epochs_without_improvement,
         }, path)
 
-    def _load_checkpoint(self, filename: str):
+    def _load_checkpoint(self, filename: str) -> int:
+        epoch, _ = self._load_checkpoint_with_batch(filename)
+        return epoch
+
+    def _load_checkpoint_with_batch(self, filename: str) -> tuple[int, int]:
         path = self.checkpoint_dir / filename
         if path.exists():
             checkpoint = torch.load(path, map_location=self.device)
             self.model.load_state_dict(checkpoint["model_state_dict"])
-            logger.info(f"Loaded best model from {path}")
+            
+            if "optimizer_state_dict" in checkpoint:
+                self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            if "scheduler_state_dict" in checkpoint:
+                self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+                
+            self.best_val_loss = checkpoint.get("best_val_loss", float("inf"))
+            self.history = checkpoint.get("history", {"train_loss": [], "val_loss": [], "lr": []})
+            self.epochs_without_improvement = checkpoint.get("epochs_without_improvement", 0)
+            
+            epoch = checkpoint.get("epoch", 0)
+            batch_idx = checkpoint.get("batch_idx", 0)
+            logger.info(f"Loaded checkpoint from {path} (epoch {epoch}, batch {batch_idx})")
+            return epoch, batch_idx
+        return 0, 0
