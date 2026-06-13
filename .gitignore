@@ -51,3 +51,20 @@ error
 local_error
 final_report_raw.pdf
 final_report_compressed.pdf
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Testing
+.pytest_cache/
+
+# Coverage
+.coverage
+htmlcov/
+
+# Environment
+.env
+.env.*
+
+# Windows
+$RECYCLE.BIN/
