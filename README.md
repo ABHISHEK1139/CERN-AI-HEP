@@ -1,4 +1,4 @@
-# CERN-AI: Graph Neural Network Anomaly Detection for High Energy Physics
+# CERN-AI-HEP: Graph Neural Network Anomaly Detection for High Energy Physics
 
 [[Report](docs/final_report.pdf)] [[Interactive Demo](demo.py)] [[Results Summary](docs/final_report.md#31-summary-of-results-6m-dataset-ablation--learning-trajectory)]
 

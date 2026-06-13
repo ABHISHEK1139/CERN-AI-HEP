@@ -3,7 +3,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="cern-ai",
+    name="cern-ai-hep",
     version="0.1.0",
     description="Graph Neural Network Based Anomaly Detection for LHC Events",
     author="Abhishek",

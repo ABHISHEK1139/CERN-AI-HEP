@@ -1,4 +1,4 @@
-# CERN-AI: Master Project Reference & Resume Guide
+# CERN-AI-HEP: Master Project Reference & Resume Guide
 
 This document is a comprehensive compilation of the GNN-based High Energy Physics (HEP) anomaly detection pipeline. It merges scientific results, system architectures, hardware optimizations, and code structures into a single source of truth. It is designed to allow AI agents or human developers to instantly customize resumes, interview talking points, and portfolios for various engineering and scientific roles.
 
