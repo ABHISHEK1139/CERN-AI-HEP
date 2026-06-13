@@ -1,6 +1,13 @@
 # Anomaly Detection in HEP Collision Events using Graph Neural Networks
 
-This document details the development, evaluation, and scientific validation of an unsupervised Graph Neural Network (GNN) for detecting anomalous signatures in High Energy Physics (HEP) collision events.
+This document details the development, evaluation, and scientific validation of an unsupervised Graph Neural Network (GNN) for detecting anomalous signatures in High Energy Physics (HEP) collision events.<style>
+img {
+    max-width: 100%;
+    width: 85%;
+    display: block;
+    margin: 0 auto;
+}
+</style>
 
 ## Introduction & Scientific Motivation
 At the Large Hadron Collider (LHC), billions of particle collisions occur every second. Rare signals corresponding to Higgs boson decays or potential new physics processes are often buried within overwhelming Standard Model backgrounds. This work investigates graph-based anomaly detection techniques capable of identifying such rare signatures without requiring explicit supervision.
