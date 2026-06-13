@@ -29,9 +29,9 @@ def plot_loss_curve(checkpoint_path, output_path):
     
     epochs = range(1, len(history['train_loss']) + 1)
     plt.figure(figsize=(8, 6))
-    plt.plot(epochs, history['train_loss'], label='Train Loss')
+    plt.plot(epochs, history['train_loss'], label='Train Loss', marker='o')
     if 'val_loss' in history and history['val_loss']:
-        plt.plot(epochs, history['val_loss'], label='Validation Loss')
+        plt.plot(epochs, history['val_loss'], label='Validation Loss', marker='o')
     plt.xlabel('Epoch')
     plt.ylabel('Loss (MSE)')
     plt.title('Autoencoder Reconstruction Loss')
