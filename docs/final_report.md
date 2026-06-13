@@ -77,27 +77,27 @@ The table below displays the entire comparative performance of the baseline and 
 ### 3.2 Model Convergence
 The EdgeConv Autoencoder successfully converged. The training loss curve below demonstrates stable reconstruction learning.
 
-![Loss Curve](loss_curve.png)
+<p align="center"><img src="loss_curve.png" width="90%"></p>
 
 ### 3.3 Anomaly Score Distribution
 By evaluating the trained model on an unseen JetClass validation set (Standard Model Background jets vs Higgs Signal jets), we observe clear separation in the reconstruction errors. The network struggles significantly more to reconstruct the Higgs jets, precisely as intended for anomaly detection.
 
-![Anomaly Distribution](anomaly_distribution.png)
+<p align="center"><img src="anomaly_distribution.png" width="90%"></p>
 
 ### 3.4 Receiver Operating Characteristic (ROC)
 The resulting ROC curve yields an **AUROC of 0.6808** for the 50-epoch EdgeConv model on the JetClass dataset. This represents a substantial improvement over the baseline MLP and GCN.
 
-![ROC Curve](roc_curve.png)
+<p align="center"><img src="roc_curve.png" width="90%"></p>
 
 ### Precision-Recall (PR) Curve
 Given that anomaly detection is inherently a highly imbalanced problem (rare anomalous events vs abundant background), the Precision-Recall curve provides crucial context. The curve demonstrates the model's performance in isolating anomalies without being overwhelmed by false positives.
 
-![PR Curve](pr_curve.png)
+<p align="center"><img src="pr_curve.png" width="90%"></p>
 
 ### 3.5 Latent Space Manifold
 To understand the network's representation power, we extracted the bottleneck latent vectors ($z$) for both classes and reduced them to 2 dimensions using t-SNE. Even though the autoencoder was trained entirely unsupervised (without class labels), the t-SNE plot reveals partial separation between signal and background regions, indicating that the latent space captures useful discriminative structure despite significant overlap.
 
-![t-SNE Latent Space](latent_space.png)
+<p align="center"><img src="latent_space.png" width="90%"></p>
 
 ### 3.6 Physics Understanding of Anomalies
 To move beyond a black-box detection approach, we analyzed the physical characteristics of the events the network flagged as "highly anomalous" compared to the "normal" background. The AI naturally isolates anomalous structures based on:
@@ -124,7 +124,7 @@ The model demonstrated minimal sensitivity to neighborhood size between $k=4$ an
 ### 3.8 CMS Open Data Validation
 Crucially, the pipeline's robustness was validated on real-world CERN CMS Open Data. The inference engine successfully loaded NanoAOD root files, constructed the particle graphs, and executed inference, confirming that the architecture is not merely restricted to clean simulated formats.
 
-![CMS Event Graph Example](event_graph.png)
+<p align="center"><img src="event_graph.png" width="90%"></p>
 
 ### 3.9 Hybrid PyG + PhysicsNeMo Benchmark
 To prove the pipeline's readiness for large-scale GPU clusters at national labs, we integrated NVIDIA's Modulus (PhysicsNeMo) framework. By replacing the standard PyTorch MLP decoder with the Modulus `FullyConnected` model, we measured a **1.62× inference speedup** (from 2.79ms to 1.73ms per pass) natively on the RTX 3050. Note that PhysicsNeMo was solely used to accelerate the decoding phase and did not alter the EdgeConv encoder's predictive accuracy. This confirms interoperability with the NVIDIA AI for Science ecosystem.
