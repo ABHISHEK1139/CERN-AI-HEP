@@ -10,6 +10,9 @@ img {
 </style>
 
 ## Introduction & Scientific Motivation
+
+Large Hadron Collider experiments produce enormous streams of collision events. Manual inspection is impossible. This work demonstrates that graph-based unsupervised anomaly detection can automatically prioritize unusual events for physicist review, addressing a critical data analysis bottleneck.
+
 At the Large Hadron Collider (LHC), billions of particle collisions occur every second. Rare signals corresponding to Higgs boson decays or potential new physics processes are often buried within overwhelming Standard Model backgrounds. This work investigates graph-based anomaly detection techniques capable of identifying such rare signatures without requiring explicit supervision.
 
 ## 1. Datasets and Experimental Setup
@@ -20,7 +23,7 @@ The project evaluates the anomaly detection pipeline across three distinct envir
 2. **CMS Open Data**: Real collision data from the CMS detector at CERN (Run 2 NanoAOD format) to validate the graph construction pipeline and inference mechanism on authentic particle interactions.
 3. **JetClass Dataset (6 Million Jet Subset)**: The primary training corpus for large-scale learning. We utilized a 6,000,000 jet subset (Part 0 of the 100M full dataset) containing:
    - **Standard Model Background**: $1,000,000$ jets of $Z \rightarrow \nu\nu$ + jets (Electroweak process).
-   - **Signal**: $5,000,000$ jets containing various decays (Top quark, Higgs, W/Z bosons). Signal processes were treated as out-of-distribution events for evaluation of anomaly detection performance.
+   - **Signal**: $5,000,000$ jets containing various decays (Top quark, Higgs, W/Z bosons). These are out-of-distribution signal processes used as anomaly proxies to evaluate detection performance.
 
 > [!NOTE]
 > The terminology "Standard Model background" is used rather than "QCD Background", as the core background component ($Z \rightarrow \nu\nu$) is an electroweak process.
@@ -63,15 +66,15 @@ The architecture functions as an unsupervised Autoencoder:
 ## 3. Results & Evaluation
 
 ### 3.1 Summary of Results (6M Dataset Ablation & Learning Trajectory)
-The table below displays the entire comparative performance of the baseline and GNN-based anomaly detection models evaluated on the JetClass dataset:
+The table below displays the entire comparative performance and architectural scale of the baseline and GNN-based anomaly detection models evaluated on the JetClass dataset:
 
-| Model | AUROC | Notes |
-| :--- | :--- | :--- |
-| MLP | 0.6233 | Baseline |
-| GCN | 0.6541 | Graph baseline (with $k$-NN fix) |
-| EdgeConv (1 epoch) | 0.6536 | Initial baseline |
-| EdgeConv (5 epochs) | 0.6628 | Fast convergence |
-| EdgeConv (50 epochs) | 0.6808 | Extended training |
+| Model | Parameters | AUROC | Notes |
+| :--- | :--- | :--- | :--- |
+| MLP | 6.3k | 0.6233 | Baseline |
+| GCN | 37k | 0.6541 | Graph baseline (with $k$-NN fix) |
+| EdgeConv (1 epoch) | 37k | 0.6536 | Initial baseline |
+| EdgeConv (5 epochs) | 37k | 0.6628 | Fast convergence |
+| EdgeConv (50 epochs) | 37k | 0.6808 | Extended training |
 
 > [!NOTE]
 > **Scientific Finding on Training Saturation**: The EdgeConv autoencoder converged rapidly, reaching **97.3%** of its final anomaly detection performance within five epochs. Additional training up to 50 epochs yielded only marginal improvements (+0.018 AUROC) while significantly increasing computational cost. During development, a batched graph-construction bug was identified and corrected, restoring meaningful neighborhood aggregation and significantly improving baseline GCN performance on this electroweak background.
@@ -152,11 +155,16 @@ To support training under local hardware constraints, two custom engineering opt
 ## 4. Limitations and Future Work
 
 ### Limitations
-- **Hardware Bottlenecks**: The current experiments were bound by the constraints of an NVIDIA RTX 3050 GPU with 4GB VRAM. This dictated our training scope: 
-  - **Dataset**: 6M JetClass subset 
-  - **Epochs**: 50
-  - **Hardware**: RTX 3050 4GB
-  - **Training Time**: ~45 hours total
+- **Hardware Bottlenecks**: The current experiments were bound by the constraints of the local environment.
+
+| Hardware / Resource | Value |
+| :--- | :--- |
+| **CPU** | i5 12th Gen |
+| **GPU** | RTX 3050 4GB |
+| **RAM** | 16GB |
+| **Dataset Size** | 6M Jets |
+| **Training Time** | ~45 Hours |
+
 - **Dataset I/O Limitations**: Processing root files into PyTorch Geometric `Data` objects is heavily CPU-bound and I/O intensive, requiring custom `IterableDataset` streams to prevent RAM saturation.
 
 ### Future Work
@@ -171,3 +179,28 @@ To support training under local hardware constraints, two custom engineering opt
 4. **Training Convergence Characterization**: Demonstrated rapid convergence behavior, achieving 97.3% of final anomaly-detection performance within five training epochs.
 5. **NVIDIA PhysicsNeMo Integration**: Integrated accelerated Modulus components and evaluated decoding phase inference speedup on RTX-class hardware.
 6. **Real-World Validation**: Validated graph construction and inference on authentic CMS Open Data, demonstrating applicability beyond synthetic simulations.
+
+## 6. Repository Structure & Reproducibility
+
+### 6.1 Codebase Architecture
+The repository is engineered for modularity and scalability:
+
+```text
+CERN-AI-HEP/
+├── event_ingestion/         # ROOT file parsing and raw data loading
+├── graph_builder/           # Conversion of events to PyG graphs
+├── anomaly_engine/          # GNN architectures and custom loss functions
+├── physicsnemo_integration/ # NVIDIA Modulus / PhysicsNeMo hooks
+├── experiments/             # Training, evaluation, and ablation scripts
+└── docs/                    # Final reports, graphs, and documentation
+```
+
+### 6.2 Reproducibility
+To quickly validate the baseline anomaly detection pipeline on your own machine:
+
+```bash
+git clone https://github.com/ABHISHEK1139/CERN-AI-HEP.git
+cd CERN-AI-HEP
+pip install -r requirements.txt
+python experiments/run_6m_ablation.py
+```
