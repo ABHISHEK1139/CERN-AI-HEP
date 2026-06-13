@@ -60,6 +60,8 @@ The architecture functions as an unsupervised Autoencoder:
 2. **Decoder**: A standard MLP reconstructs the original particle features.
 3. **Anomaly Score**: The Mean Squared Error (MSE) between the input and reconstruction serves as the anomaly score. The model is trained purely on the Standard Model background (the 1,000,000 $Z \rightarrow \nu\nu$ jets), resulting in high reconstruction errors for unseen anomalous signals.
 
+## 3. Results & Evaluation
+
 ### 3.1 Summary of Results (6M Dataset Ablation & Learning Trajectory)
 The table below displays the entire comparative performance of the baseline and GNN-based anomaly detection models evaluated on the JetClass dataset:
 
@@ -74,25 +76,35 @@ The table below displays the entire comparative performance of the baseline and 
 > [!NOTE]
 > **Scientific Finding on Training Saturation**: The EdgeConv autoencoder converged rapidly, reaching **97.3%** of its final anomaly detection performance within five epochs. Additional training up to 50 epochs yielded only marginal improvements (+0.018 AUROC) while significantly increasing computational cost. During development, a batched graph-construction bug was identified and corrected, restoring meaningful neighborhood aggregation and significantly improving baseline GCN performance on this electroweak background.
 
+<!-- pagebreak -->
+
 ### 3.2 Model Convergence
 The EdgeConv Autoencoder successfully converged. The training loss curve below demonstrates stable reconstruction learning.
 
 <p align="center"><img src="loss_curve.png" width="90%"></p>
+
+<!-- pagebreak -->
 
 ### 3.3 Anomaly Score Distribution
 By evaluating the trained model on an unseen JetClass validation set (Standard Model Background jets vs Higgs Signal jets), we observe clear separation in the reconstruction errors. The network struggles significantly more to reconstruct the Higgs jets, precisely as intended for anomaly detection.
 
 <p align="center"><img src="anomaly_distribution.png" width="90%"></p>
 
+<!-- pagebreak -->
+
 ### 3.4 Receiver Operating Characteristic (ROC)
 The resulting ROC curve yields an **AUROC of 0.6808** for the 50-epoch EdgeConv model on the JetClass dataset. This represents a substantial improvement over the baseline MLP and GCN.
 
 <p align="center"><img src="roc_curve.png" width="90%"></p>
 
+<!-- pagebreak -->
+
 ### Precision-Recall (PR) Curve
 Given that anomaly detection is inherently a highly imbalanced problem (rare anomalous events vs abundant background), the Precision-Recall curve provides crucial context. The curve demonstrates the model's performance in isolating anomalies without being overwhelmed by false positives.
 
 <p align="center"><img src="pr_curve.png" width="90%"></p>
+
+<!-- pagebreak -->
 
 ### 3.5 Latent Space Manifold
 To understand the network's representation power, we extracted the bottleneck latent vectors ($z$) for both classes and reduced them to 2 dimensions using t-SNE. Even though the autoencoder was trained entirely unsupervised (without class labels), the t-SNE plot reveals partial separation between signal and background regions, indicating that the latent space captures useful discriminative structure despite significant overlap.

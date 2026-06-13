@@ -14,7 +14,11 @@ def build_pdf():
     with open("final_report.md", "r", encoding="utf-8") as f:
         md_text = f.read()
         
-    pdf.add_section(Section(md_text, toc=False))
+    parts = md_text.split("<!-- pagebreak -->")
+    
+    for i, part in enumerate(parts):
+        pdf.add_section(Section(part.strip(), toc=False))
+        
     pdf.meta["title"] = "Final Report"
     pdf.save(temp_pdf)
     
