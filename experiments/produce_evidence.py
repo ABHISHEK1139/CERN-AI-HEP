@@ -37,7 +37,7 @@ def plot_loss_curve(checkpoint_path, output_path):
     plt.title('Autoencoder Reconstruction Loss')
     plt.legend()
     plt.grid(True)
-    plt.savefig(output_path, dpi=300)
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
     logger.info(f"Saved {output_path}")
 
@@ -54,7 +54,7 @@ def draw_event_graph(data, output_path):
     plt.style.use('dark_background')
     nx.draw(G, pos, node_size=20, node_color='#00ffcc', edge_color='#444444', alpha=0.7)
     plt.title("JetClass Particle Cloud (k-NN Graph)", color='white')
-    plt.savefig(output_path, dpi=300, facecolor='black')
+    plt.savefig(output_path, dpi=300, facecolor='black', bbox_inches='tight')
     plt.style.use('default')
     plt.close()
     logger.info(f"Saved {output_path}")
@@ -127,7 +127,7 @@ def generate_evidence():
     plt.title('Anomaly Detection ROC on JetClass (SM background vs Higgs)')
     plt.legend(loc="lower right")
     plt.grid(True)
-    plt.savefig(out_dir / "roc_curve.png", dpi=300)
+    plt.savefig(out_dir / "roc_curve.png", dpi=300, bbox_inches='tight')
     plt.close()
     logger.info("Saved results/roc_curve.png")
 
@@ -142,7 +142,7 @@ def generate_evidence():
     plt.title('Anomaly Detection PR Curve on JetClass')
     plt.legend(loc="upper right")
     plt.grid(True)
-    plt.savefig(out_dir / "pr_curve.png", dpi=300)
+    plt.savefig(out_dir / "pr_curve.png", dpi=300, bbox_inches='tight')
     plt.close()
     logger.info("Saved results/pr_curve.png")
 
@@ -162,7 +162,7 @@ def generate_evidence():
     plt.ylabel('Density')
     plt.title('Anomaly Score Distribution on JetClass')
     plt.legend()
-    plt.savefig(out_dir / "anomaly_distribution.png", dpi=300)
+    plt.savefig(out_dir / "anomaly_distribution.png", dpi=300, bbox_inches='tight')
     plt.close()
     logger.info("Saved results/anomaly_distribution.png")
 
@@ -178,7 +178,7 @@ def generate_evidence():
     plt.ylabel('t-SNE 2')
     plt.title('Latent Space t-SNE Visualization on JetClass')
     plt.legend()
-    plt.savefig(out_dir / "latent_space_tsne.png", dpi=300)
+    plt.savefig(out_dir / "latent_space_tsne.png", dpi=300, bbox_inches='tight')
     plt.close()
     logger.info("Saved results/latent_space_tsne.png")
 
