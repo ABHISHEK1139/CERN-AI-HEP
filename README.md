@@ -2,6 +2,16 @@
 
 [[Report](docs/final_report.pdf)] [[Interactive Demo](demo.py)] [[Results Summary](docs/final_report.md#31-summary-of-results-6m-dataset-ablation--learning-trajectory)]
 
+### 📊 Project Highlights at a Glance
+
+| Metric | Flagship Model Configuration |
+| :--- | :--- |
+| **Dataset** | JetClass (6 Million constituent particle jets) |
+| **Model Architecture** | EdgeConv Graph Autoencoder (Dynamic k-NN) |
+| **Model Parameters** | 37,296 (Trainable weight parameters) |
+| **Best AUROC** | **0.6808** (Unsupervised anomaly detection) |
+| **Local Hardware** | NVIDIA RTX 3050 4GB GPU + 16GB RAM |
+
 This repository implements an unsupervised anomaly detection pipeline for High Energy Physics (HEP) collision events using advanced Graph Neural Networks (GNNs). The project was built with the goal of identifying extremely rare "new physics" signatures (such as Higgs boson decays) buried within massive datasets of Standard Model background processes.
 
 ## 🚀 Scientific Motivation

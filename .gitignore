@@ -14,8 +14,17 @@ build/
 data/
 *.root
 
-# Model checkpoints (too large for git)
-checkpoints/
+# Model checkpoints (too large for git, except key best models)
+checkpoints/*
+!checkpoints/README.md
+!checkpoints/classifier_gcn_best.pt
+!checkpoints/jetclass_autoencoder/
+!checkpoints/jetclass_autoencoder/jetclass_edgeconv_best.pt
+!checkpoints/jetclass_autoencoder/jetclass_gcn_best.pt
+!checkpoints/cms_autoencoder/
+!checkpoints/cms_autoencoder/cms_gcn_best.pt
+!checkpoints/lhco_autoencoder/
+!checkpoints/lhco_autoencoder/lhco_gcn_best.pt
 
 # PyTorch Geometric processed cache
 graphs/
