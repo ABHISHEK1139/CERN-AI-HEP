@@ -39,8 +39,8 @@ graph TD
     F -->|"Particle Features"| G["Reconstruction Error (MSE)"]
     G -->|"Thresholding"| H["Anomaly Score"]
     
-    style A fill:#f9d0c4,stroke:#333,stroke-width:2px
-    style H fill:#d4e157,stroke:#333,stroke-width:2px
+    style A fill:#f9d0c4,stroke:#333,stroke-width:2px,color:#000
+    style H fill:#d4e157,stroke:#333,stroke-width:2px,color:#000
 ```
 
 ### Why EdgeConv?

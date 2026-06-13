@@ -39,8 +39,8 @@ graph TD
     F -->|"Particle Features"| G["Reconstruction Error (MSE)"]
     G -->|"Thresholding"| H["Anomaly Score"]
     
-    style A fill:#f9d0c4,stroke:#333,stroke-width:2px
-    style H fill:#d4e157,stroke:#333,stroke-width:2px
+    style A fill:#f9d0c4,stroke:#333,stroke-width:2px,color:#000
+    style H fill:#d4e157,stroke:#333,stroke-width:2px,color:#000
 ```
 
 Initially, we implemented a baseline Graph Convolutional Network (GCN) using fixed $k$-Nearest Neighbor ($k$-NN) graphs based on $\Delta\eta-\Delta\phi$ coordinates. After correcting a key tensor index bug on batched GPU tensors (where self-loops originally dominated due to a broken diagonal fill), the baseline GCN achieved 0.6541 AUROC.
