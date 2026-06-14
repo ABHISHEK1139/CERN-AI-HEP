@@ -35,3 +35,8 @@ pyyaml>=6.0
 
 # Dimensionality Reduction (for latent space viz)
 umap-learn>=0.5
+
+# Presentation & Documentation
+streamlit>=1.30.0
+networkx>=3.0
+markdown-pdf>=1.3

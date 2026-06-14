@@ -26,5 +26,5 @@ COPY . .
 # Install project in editable mode
 RUN pip install -e .
 
-# Default: run benchmark
-CMD ["python", "experiments/run_benchmark.py"]
+# Default: run the fully verified ablation study baseline
+CMD ["python", "experiments/run_6m_ablation.py"]
