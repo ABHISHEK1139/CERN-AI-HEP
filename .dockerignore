@@ -1,0 +1,11 @@
+.git
+.venv
+data
+checkpoints
+scratch
+val_5M
+__pycache__
+*.root
+*.h5
+*.pdf
+.pytest_cache
