@@ -1,7 +1,6 @@
 .git
 .venv
 data
-checkpoints
 scratch
 val_5M
 __pycache__
