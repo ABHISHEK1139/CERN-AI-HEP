@@ -104,22 +104,31 @@ def plot_error_heatmap(jet, node_mse):
     for i in range(edge_index.shape[1]):
         G.add_edge(edge_index[0, i], edge_index[1, i])
         
-    fig, ax = plt.subplots(figsize=(6, 5))
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(4, 3), dpi=150)
+    fig.patch.set_facecolor('none')
+    ax.set_facecolor('none')
     
     # Use actual physics coordinates (eta, phi) for the node layout
     pos = {i: (jet.x[i, 4].item(), jet.x[i, 5].item()) for i in range(jet.x.size(0))}
     
-    # Custom colormap visualization (Blue=Good, Yellow=Suspicious, Red=Anomalous)
-    sc = nx.draw_networkx_nodes(G, pos, node_size=60, node_color=node_mse, cmap=plt.cm.jet, alpha=0.9, ax=ax)
-    nx.draw_networkx_edges(G, pos, edge_color='#888888', alpha=0.3, ax=ax)
-    plt.colorbar(sc, ax=ax, label="Particle Reconstruction MSE", shrink=0.8)
+    # Custom colormap visualization
+    sc = nx.draw_networkx_nodes(G, pos, node_size=30, node_color=node_mse, cmap=plt.cm.coolwarm, alpha=0.9, ax=ax, linewidths=0.5, edgecolors='white')
+    nx.draw_networkx_edges(G, pos, edge_color='#666666', alpha=0.4, ax=ax)
+    
+    cbar = plt.colorbar(sc, ax=ax, shrink=0.7, pad=0.02)
+    cbar.set_label("Reconstruction MSE", fontsize=8, color='lightgray')
+    cbar.ax.tick_params(labelsize=7, colors='lightgray')
     
     # Format axes to look like a physics plot
-    ax.set_xlabel("\u0394\u03B7 (Pseudo-rapidity)")
-    ax.set_ylabel("\u0394\u03C6 (Azimuthal Angle)")
-    ax.tick_params(left=True, bottom=True, labelleft=True, labelbottom=True)
-    ax.grid(True, linestyle='--', alpha=0.5)
-    
+    ax.set_xlabel("\u0394\u03B7 (Pseudo-rapidity)", fontsize=8, color='lightgray')
+    ax.set_ylabel("\u0394\u03C6 (Azimuthal)", fontsize=8, color='lightgray')
+    ax.tick_params(left=True, bottom=True, labelleft=True, labelbottom=True, labelsize=7, colors='lightgray')
+    ax.grid(True, linestyle=':', alpha=0.3, color='gray')
+    for spine in ax.spines.values():
+        spine.set_color('#444444')
+        
+    plt.tight_layout()
     return fig
 
 def display_metrics(jet):
