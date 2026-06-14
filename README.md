@@ -13,7 +13,13 @@ Built using:
 **Dataset Scale:** 6 Million Jets  
 **Hardware:** RTX 3050 4GB  
 
-<img src="docs/demo.png" width="800" alt="Streamlit Anomaly Detection Dashboard Demo">
+## 3D Particle Cloud Topologies ($\Delta\eta$-$\Delta\phi$ Plane)
+
+| Standard Model Background | Higgs Boson Anomaly |
+|:---:|:---:|
+| <img src="docs/bg_event.png" width="400" alt="Background Event"> | <img src="docs/sig_event.png" width="400" alt="Higgs Anomaly"> |
+
+*Red nodes indicate particles with high reconstruction error flagged by the unsupervised autoencoder.*
 
 ---
 
