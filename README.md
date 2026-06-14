@@ -93,6 +93,9 @@ Additional 45 epochs improved performance by only 0.018 AUROC. This suggests rep
 ### Training Curve
 <img src="docs/loss_curve.png" width="600" alt="Training Curve">
 
+### Anomaly Score Distribution
+<img src="docs/anomaly_distribution.png" width="600" alt="Anomaly Distribution">
+
 ### ROC Curve
 <img src="docs/roc_curve.png" width="600" alt="ROC Curve">
 
@@ -129,7 +132,7 @@ The complete pipeline was validated on real CMS NanoAOD detector events.
 
 This demonstrates applicability beyond synthetic benchmarks.
 
-<img src="docs/cms_validation.png" width="600" alt="CMS Validation">
+<img src="docs/event_graph.png" width="600" alt="CMS Open Data Validation - Event Graph">
 
 ---
 
