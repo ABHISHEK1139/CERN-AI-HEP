@@ -83,16 +83,16 @@ Used for large-scale anomaly detection experiments.
 
 ---
 
-## Key Scientific Finding
+## Training Saturation Analysis
 
-EdgeConv reached **97.3%** of final performance within only 5 epochs.
+The EdgeConv autoencoder achieved 0.6628 AUROC after only 5 epochs and 0.6808 AUROC after 50 epochs. Thus, over 97% of the final performance was obtained during the initial training phase.
 
 | Epochs | AUROC |
 |---------|---------|
 | 5 | 0.6628 |
 | 50 | 0.6808 |
 
-Additional 45 epochs improved performance by only 0.018 AUROC. This suggests representation learning is the primary bottleneck rather than optimization runtime.
+The remaining 45 epochs produced only a modest improvement of 0.018 AUROC, indicating that the model converges rapidly on the JetClass benchmark. These results suggest that future improvements are likely to depend more on representational capacity, feature engineering, or architectural design than on extending training duration alone.
 
 ---
 
