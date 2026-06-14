@@ -95,8 +95,7 @@ def run_inference(jet):
     with torch.no_grad():
         res = model(batch)
         score = res['per_graph_loss'].item()
-        x_hat = res['x_hat']
-        node_mse = ((batch.x - x_hat)**2).mean(dim=1).cpu().numpy()
+        node_mse = res['per_node_loss'].cpu().numpy()
     return score, node_mse
 
 def plot_error_heatmap(jet, node_mse):
