@@ -13,6 +13,8 @@ Built using:
 **Dataset Scale:** 6 Million Jets  
 **Hardware:** RTX 3050 4GB  
 
+<img src="docs/demo.png" width="800" alt="Streamlit Anomaly Detection Dashboard Demo">
+
 ---
 
 ## Scientific Motivation

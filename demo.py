@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from graph_builder.jetclass_dataset import JetClassDataset
 from anomaly_engine.models.edge_conv import EdgeConvEncoder
 from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
+from torch_geometric.data import Batch
 
 # Set page config
 st.set_page_config(page_title="CERN AI: Anomaly Detection Dashboard", layout="wide")
@@ -38,6 +39,16 @@ def load_model(ckpt_path="checkpoints/jetclass_autoencoder/jetclass_edgeconv_bes
     return model, device
 
 model, device = load_model()
+
+# Sidebar: Model Card
+st.sidebar.markdown("## ⚙️ Model Card")
+st.sidebar.markdown("""
+**Model:** EdgeConv Autoencoder  
+**Parameters:** 37,296  
+**Training Dataset:** JetClass 6M  
+**Best AUROC:** 0.6808  
+""")
+st.sidebar.markdown("---")
 
 # Select Event Type
 st.sidebar.header("Select Physics Sample")
@@ -73,6 +84,29 @@ jet = get_sample_jet(sample_type)
 if jet is None:
     st.error("No raw validation datasets found! Run experiments/produce_evidence.py to prepare the workspace data first.")
 else:
+    # Run Inference
+    batch = Batch.from_data_list([jet]).to(device)
+    with torch.no_grad():
+        res = model(batch)
+        score = res['per_graph_loss'].item()
+        
+    threshold = 235.0
+    is_anomaly = score > threshold
+
+    # PROMINENT ANOMALY SCORE DISPLAY
+    st.markdown("---")
+    st.subheader("⚡ Real-time Event Classification")
+    
+    col_score, col_verdict = st.columns(2)
+    with col_score:
+        st.metric(label="Anomaly Score", value=f"{score:.2f}")
+    with col_verdict:
+        if is_anomaly:
+            st.error("🚨 Classification: **Anomalous**")
+        else:
+            st.success("✅ Classification: **Standard Model**")
+    st.markdown("---")
+
     # Construct details layout
     col1, col2 = st.columns([1, 2])
     
@@ -82,12 +116,12 @@ else:
         leading_pt = jet.x[:, 0].max().item()
         
         st.metric("Constituent Particles", f"{n_particles}")
-        st.metric("Leading Particle pt", f"{leading_pt:.2f} GeV")
+        st.metric("Leading Particle pT (normalized)", f"{leading_pt:.2f}")
         
         # Display Feature Table
         st.write("First 5 particles features:")
         feats_df = {
-            "pt": jet.x[:5, 0].numpy(),
+            "pT": jet.x[:5, 0].numpy(),
             "eta": jet.x[:5, 4].numpy(),
             "phi": jet.x[:5, 5].numpy(),
             "charge": jet.x[:5, 10].numpy(),
@@ -106,33 +140,3 @@ else:
         pos = nx.spring_layout(G, seed=42)
         nx.draw(G, pos, node_size=30, node_color='#1e88e5', edge_color='#cccccc', alpha=0.8, ax=ax)
         st.pyplot(fig)
-        
-    # Run Inference
-    st.markdown("---")
-    st.subheader("⚡ Anomaly Score Evaluation")
-    
-    # Format batch
-    from torch_geometric.data import Batch
-    batch = Batch.from_data_list([jet]).to(device)
-    
-    with torch.no_grad():
-        res = model(batch)
-        score = res['per_graph_loss'].item()
-        
-    col_score, col_verdict = st.columns(2)
-    
-    # We calibrate classification based on threshold (e.g. 235)
-    threshold = 235.0
-    is_anomaly = score > threshold
-    
-    with col_score:
-        st.metric("Autoencoder Reconstruction MSE (Anomaly Score)", f"{score:.4f}")
-        st.write(f"Anomaly threshold calibrated at: **{threshold}**")
-        
-    with col_verdict:
-        if is_anomaly:
-            st.error("🚨 ANOMALOUS EVENT DETECTED!")
-            st.markdown(f"The reconstruction error is above the background threshold. This jet is classified as **Out-of-Distribution** (Signal-like anomaly).")
-        else:
-            st.success("✅ STANDARD MODEL EVENT APPROVED")
-            st.markdown("The reconstruction error is below the anomaly threshold. This jet is classified as **In-Distribution** (SM Background-like).")
