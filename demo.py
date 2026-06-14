@@ -101,16 +101,19 @@ else:
 
     # PROMINENT ANOMALY SCORE DISPLAY
     st.markdown("---")
-    st.subheader("⚡ Real-time Event Classification")
     
-    col_score, col_verdict = st.columns(2)
-    with col_score:
-        st.metric(label="Anomaly Score", value=f"{score:.2f}")
-    with col_verdict:
-        if is_anomaly:
-            st.error("🚨 Classification: **Anomalous**")
-        else:
-            st.success("✅ Classification: **Standard Model**")
+    with st.container(border=True):
+        st.subheader("⚡ Inference Results")
+        col_score, col_thresh, col_verdict = st.columns(3)
+        with col_score:
+            st.metric(label="Anomaly Score", value=f"{score:.2f}")
+        with col_thresh:
+            st.metric(label="Threshold", value=f"{threshold:.2f}")
+        with col_verdict:
+            if is_anomaly:
+                st.error("Prediction: **ANOMALOUS** 🚨")
+            else:
+                st.success("Prediction: **STANDARD MODEL** ✅")
     st.markdown("---")
 
     # Construct details layout
