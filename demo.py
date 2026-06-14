@@ -57,9 +57,15 @@ sample_type = st.sidebar.selectbox(
     ["Standard Model Background (Z \u2192 \u03BD\u03BD)", "Higgs Boson Signal (Anomaly)"]
 )
 
+if "seed" not in st.session_state:
+    st.session_state.seed = 42
+
+if st.sidebar.button("🎲 Generate New Collision Event"):
+    st.session_state.seed = np.random.randint(0, 100000)
+
 # Load Sample Data
 @st.cache_data
-def get_sample_jet(sample_type):
+def get_sample_jet(sample_type, seed):
     # Load from val files
     val_bg_files = sorted(glob("data/jetclass/val_5M/ZJetsToNuNu_*.root"))
     val_sig_files = sorted(glob("data/jetclass/val_5M/HTo*.root"))
@@ -75,11 +81,11 @@ def get_sample_jet(sample_type):
     
     # Return a random jet from dataset
     import random
-    random.seed(42) # fix seed for reproducibility
+    random.seed(seed)
     idx = random.randint(0, len(ds) - 1)
     return ds[idx]
 
-jet = get_sample_jet(sample_type)
+jet = get_sample_jet(sample_type, st.session_state.seed)
 
 if jet is None:
     st.error("No raw validation datasets found! Run experiments/produce_evidence.py to prepare the workspace data first.")
