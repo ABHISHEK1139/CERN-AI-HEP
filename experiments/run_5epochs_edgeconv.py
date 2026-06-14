@@ -123,7 +123,7 @@ def main():
     model = GraphAutoencoder(enc, dec).to(device)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    scaler = torch.amp.GradScaler('cuda')
+    scaler = torch.cuda.amp.GradScaler()
     
     epochs = 5
     epoch_results = []
@@ -139,7 +139,7 @@ def main():
             data.edge_index = build_knn_graph_gpu(data.x, data.batch, k=8)
             
             optimizer.zero_grad()
-            with torch.amp.autocast('cuda'):
+            with torch.cuda.amp.autocast():
                 loss = model(data)['loss']
                 
             scaler.scale(loss).backward()

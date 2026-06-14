@@ -115,7 +115,7 @@ def get_model(arch, input_dim=16, hidden_dim=64, latent_dim=32):
 
 def train_and_eval(model, train_ds, val_loader, device):
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    scaler = torch.amp.GradScaler('cuda')
+    scaler = torch.cuda.amp.GradScaler()
     
     model.train()
     print("  Training 1 epoch on 6 million...")
@@ -125,7 +125,7 @@ def train_and_eval(model, train_ds, val_loader, device):
             data.edge_index = build_knn_graph_gpu(data.x, data.batch, k=8)
             
         optimizer.zero_grad()
-        with torch.amp.autocast('cuda'):
+        with torch.cuda.amp.autocast():
             if isinstance(model, MLPAutoencoder):
                 loss = model(data)['per_graph_loss'].mean()
             else:
