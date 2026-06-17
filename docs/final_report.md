@@ -120,7 +120,7 @@ To move beyond a black-box detection approach, we analyzed the physical characte
 2. **Particle Multiplicity**: Anomalous events feature significantly more constituent particles per jet, corresponding to complex decay chains (e.g., $H \rightarrow b\bar{b}$) versus sparse electroweak jets.
 3. **Transverse Momentum ($p_T$)**: The $p_T$ distribution shifts higher for flagged anomalies, confirming the network's sensitivity to high-energy outliers.
 
-This confirms the AI is learning valid physical representations of particle decays, rather than exploiting unrelated artifacts in the simulation.
+This suggests that the model is learning physically meaningful representations of particle decays, rather than relying only on unrelated artifacts in the simulation.
 
 ### 3.7 Research Validation: Why EdgeConv?
 The baseline MLP achieved 0.6233 AUROC, GCN achieved 0.6541 AUROC, and EdgeConv (k=8) achieved 0.6536 AUROC after the 1-epoch benchmark on the 6M dataset. With the GPU-accelerated $k$-NN graph construction bug corrected (filling the batched diagonal with infinity properly to prevent self-loop dominance), GCN and EdgeConv perform comparably during early training, while EdgeConv exhibits superior performance after extended optimization. EdgeConv's dynamic graph construction allows it to learn local topological features in the latent space over multi-epoch training, capturing decay tree structures by grouping particles based on learned momentum and ID representations.
@@ -142,14 +142,14 @@ Crucially, the pipeline's robustness was validated on real-world CERN CMS Open D
 <p align="center"><img src="event_graph.png" width="90%"></p>
 
 ### 3.9 Hybrid PyG + PhysicsNeMo Benchmark
-To prove the pipeline's readiness for large-scale GPU clusters at national labs, we integrated NVIDIA's Modulus (PhysicsNeMo) framework. By replacing the standard PyTorch MLP decoder with the Modulus `FullyConnected` model, we measured a **1.62× inference speedup** (from 2.79ms to 1.73ms per pass) natively on the RTX 3050. Note that PhysicsNeMo was solely used to accelerate the decoding phase and did not alter the EdgeConv encoder's predictive accuracy. This confirms interoperability with the NVIDIA AI for Science ecosystem.
+To evaluate compatibility with AI-for-science tooling used in large-scale GPU environments, we integrated NVIDIA's Modulus (PhysicsNeMo) framework. By replacing the standard PyTorch MLP decoder with the Modulus `FullyConnected` model, we measured a **1.62x inference speedup** (from 2.79ms to 1.73ms per pass) natively on the RTX 3050. Note that PhysicsNeMo was solely used to accelerate the decoding phase and did not alter the EdgeConv encoder's predictive accuracy. This confirms interoperability with the NVIDIA AI for Science ecosystem.
 
 ### 3.10 Training Saturation Analysis
 To characterize the learning efficiency of the dynamic graph autoencoder, we evaluated the validation AUROC epoch-by-epoch during early training. The model achieved 97.3% of its final anomaly detection performance within the first 5 epochs (AUROC of 0.6628), with subsequent training up to 50 epochs yielding a slow, asymptotic improvement to 0.6808. This suggests that the primary bottleneck for further performance gains lies in the input representation and architecture rather than optimization runtime.
 
 ### 3.11 Implementation Optimizations
 To support training under local hardware constraints, two custom engineering optimizations were introduced:
-1. **GPU-Accelerated Collation**: Bypassed single-threaded Python CPU collation bottlenecks by designing a custom pipeline that loads data chunks directly into GPU memory, performing padding removal and collation natively on the tensor level (achieving a 15x–40x execution speedup).
+1. **GPU-Accelerated Collation**: Bypassed single-threaded Python CPU collation bottlenecks by designing a custom pipeline that loads data chunks directly into GPU memory, performing padding removal and collation natively on the tensor level (achieving a 15x-40x execution speedup).
 2. **Vectorized Graph Loss**: Replaced a slow Python loop over graph instances inside the loss calculation with a single vectorized `scatter` GPU kernel, preventing kernel queue bottlenecks.
 
 ## 4. Limitations and Future Work
@@ -187,20 +187,26 @@ The repository is engineered for modularity and scalability:
 
 ```text
 CERN-AI-HEP/
-├── event_ingestion/         # ROOT file parsing and raw data loading
-├── graph_builder/           # Conversion of events to PyG graphs
-├── anomaly_engine/          # GNN architectures and custom loss functions
-├── physicsnemo_integration/ # NVIDIA Modulus / PhysicsNeMo hooks
-├── experiments/             # Training, evaluation, and ablation scripts
-└── docs/                    # Final reports, graphs, and documentation
+|-- event_ingestion/         # ROOT file parsing and raw data loading
+|-- graph_builder/           # Conversion of events to PyG graphs
+|-- anomaly_engine/          # GNN architectures and custom loss functions
+|-- physicsnemo_integration/ # NVIDIA Modulus / PhysicsNeMo hooks
+|-- experiments/             # Training, evaluation, and ablation scripts
+`-- docs/                    # Final reports, graphs, and documentation
 ```
 
 ### 6.2 Reproducibility
-To quickly validate the baseline anomaly detection pipeline on your own machine:
+To quickly validate the graph pipeline on your own machine, use the small synthetic smoke-test configuration:
 
 ```bash
 git clone https://github.com/ABHISHEK1139/CERN-AI-HEP.git
 cd CERN-AI-HEP
 pip install -r requirements.txt
+python experiments/train_classifier.py --config experiments/configs/smoke.yaml --model gcn --epochs 2 --device cpu
+```
+
+The large-scale JetClass benchmark requires the dataset files and a longer GPU run:
+
+```bash
 python experiments/run_6m_ablation.py
 ```

@@ -41,7 +41,7 @@ def prepare_data(config, data_dir=None):
     graphs_file = graph_dir / "graphs.pt"
 
     if graphs_file.exists():
-        graphs = torch.load(graphs_file)
+        graphs = torch.load(graphs_file, weights_only=False)
     else:
         logging.info("Generating synthetic data for benchmark...")
         syn_config = config["data"]["synthetic"]

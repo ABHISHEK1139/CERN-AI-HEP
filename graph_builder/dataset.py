@@ -46,7 +46,7 @@ class CollisionEventDataset(InMemoryDataset):
         super().__init__(root, transform, pre_transform)
 
         if Path(self.processed_paths[0]).exists():
-            self.data, self.slices = torch.load(self.processed_paths[0])
+            self.data, self.slices = torch.load(self.processed_paths[0], weights_only=False)
         elif graphs is not None:
             self.data, self.slices = self.collate(graphs)
             # Save for future use
@@ -56,7 +56,7 @@ class CollisionEventDataset(InMemoryDataset):
             # Try loading from graphs.pt
             graphs_path = Path(root) / "graphs.pt"
             if graphs_path.exists():
-                graphs = torch.load(graphs_path)
+                graphs = torch.load(graphs_path, weights_only=False)
                 self.data, self.slices = self.collate(graphs)
                 Path(self.processed_dir).mkdir(parents=True, exist_ok=True)
                 torch.save((self.data, self.slices), self.processed_paths[0])

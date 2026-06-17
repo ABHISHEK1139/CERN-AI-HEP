@@ -9,7 +9,7 @@ Built using:
 - JetClass Dataset
 - NVIDIA PhysicsNeMo
 
-**Final Best AUROC:** 0.6808  
+**Best JetClass AUROC:** 0.6808  
 **Dataset Scale:** 6 Million Jets  
 **Hardware:** RTX 3050 4GB  
 
@@ -25,7 +25,7 @@ Built using:
 
 ## Scientific Motivation
 
-Large Hadron Collider experiments generate billions of collision events. Rare physics signatures are buried inside overwhelming Standard Model backgrounds. This project investigates whether Graph Neural Networks can automatically identify anomalous particle interactions without explicit supervision.
+Large Hadron Collider experiments generate billions of collision events. Rare physics signatures are buried inside overwhelming Standard Model backgrounds. This project investigates whether Graph Neural Networks can prioritize unusual collision-event candidates for physicist review without relying on explicit anomaly labels.
 
 ---
 
@@ -62,7 +62,7 @@ graph TD
 - 6 Million Jets
 
 **Background:**
-- 1M Z→νν jets
+- 1M Z -> nu nu jets
 
 **Signal:**
 - 5M Higgs / Top / W / Z decays
@@ -124,7 +124,7 @@ A hybrid PyTorch Geometric + PhysicsNeMo implementation was benchmarked.
 | PyG | 2.79 ms |
 | PhysicsNeMo Hybrid | 1.73 ms |
 
-**Speedup:** 1.62×
+**Speedup:** 1.62x
 
 ---
 
@@ -160,23 +160,35 @@ This demonstrates applicability beyond synthetic benchmarks.
 
 ```text
 CERN-AI-HEP/
-├── event_ingestion/
-├── graph_builder/
-├── anomaly_engine/
-├── physicsnemo_integration/
-├── experiments/
-├── docs/
-└── checkpoints/
+|-- event_ingestion/
+|-- graph_builder/
+|-- anomaly_engine/
+|-- physicsnemo_integration/
+|-- experiments/
+|-- docs/
+`-- checkpoints/
 ```
 
 ---
 
 ## Reproduce
 
+### Quick smoke test
+
+Use the small synthetic configuration to verify that data generation, graph construction, training, and evaluation run end-to-end:
+
 ```bash
 git clone https://github.com/ABHISHEK1139/CERN-AI-HEP.git
 cd CERN-AI-HEP
 pip install -r requirements.txt
+python experiments/train_classifier.py --config experiments/configs/smoke.yaml --model gcn --epochs 2 --device cpu
+```
+
+### Full JetClass benchmark
+
+The large-scale result requires the JetClass files and is intended for a longer GPU run:
+
+```bash
 python experiments/run_6m_ablation.py
 ```
 
@@ -186,5 +198,5 @@ python experiments/run_6m_ablation.py
 
 - Full 100M JetClass Training
 - ATLAS Open Data Support
-- Interactive Web Dashboard
+- Web dashboard polish and packaged demo data
 - Multi-GPU Scaling

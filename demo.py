@@ -18,10 +18,10 @@ from torch_geometric.data import Batch
 # Set page config
 st.set_page_config(page_title="CERN AI: Anomaly Detection Platform", layout="wide", initial_sidebar_state="expanded")
 
-st.title("🧠 CERN AI: GNN Anomaly Detection Research Platform")
+st.title("CERN AI: GNN Anomaly Detection Research Platform")
 st.markdown("""
 This interactive research platform demonstrates an unsupervised anomaly detection pipeline on **3D Particle Clouds** representing collision jets at the LHC. 
-It leverages a pre-trained **EdgeConv Graph Autoencoder** to identify new physics topologies strictly by learning the underlying geometry of Standard Model backgrounds.
+It uses a pre-trained **EdgeConv Graph Autoencoder** to rank unusual jet topologies by learning the geometry of Standard Model background-like events.
 """)
 
 # Load Model
@@ -42,7 +42,7 @@ def load_model(ckpt_path="checkpoints/jetclass_autoencoder/jetclass_edgeconv_bes
 model, device = load_model()
 
 # ================= SIDEBAR =================
-with st.sidebar.expander("⚙️ Training Statistics Card", expanded=True):
+with st.sidebar.expander("Training Statistics Card", expanded=True):
     st.markdown("""
     **Architecture:** EdgeConv Graph Autoencoder  
     **Parameters:** 37,296  
@@ -68,7 +68,7 @@ else:
 if "seed" not in st.session_state:
     st.session_state.seed = 42
 
-if st.sidebar.button("🎲 Generate New Collision Event(s)"):
+if st.sidebar.button("Generate New Collision Event(s)"):
     st.session_state.seed = np.random.randint(0, 100000)
 
 # ================= DATA LOADING =================
@@ -148,13 +148,13 @@ def display_metrics(jet):
     
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("##### ⚛️ Physics")
+        st.markdown("##### Physics")
         st.markdown("---")
         st.metric("Total Jet pT (norm)", f"{pT:.2f}")
         st.metric("Constituents", f"{n_const}")
         st.metric("Avg Charge", f"{avg_charge:.2f}")
     with c2:
-        st.markdown("##### 🕸 Topology")
+        st.markdown("##### Topology")
         st.markdown("---")
         st.metric("Nodes", f"{n_const}")
         st.metric("Edges", f"{n_edges}")
@@ -174,13 +174,13 @@ def render_event_column(jet, title):
     st.markdown(f"### {title}")
     
     with st.container(border=True):
-        st.markdown("#### ⚡ Inference Result")
+        st.markdown("#### Inference Result")
         c1, c2 = st.columns(2)
         c1.metric("Anomaly Score", f"{score:.2f}")
         if is_anomaly:
-            c2.error("Prediction: **ANOMALOUS** 🚨")
+            c2.error("Prediction: **ANOMALOUS**")
         else:
-            c2.success("Prediction: **STANDARD MODEL** ✅")
+            c2.success("Prediction: **STANDARD MODEL**")
             
     st.markdown("#### Reconstruction Error Heatmap")
     st.pyplot(plot_error_heatmap(jet, node_mse))
@@ -189,7 +189,7 @@ def render_event_column(jet, title):
     return score, node_mse
 
 # ================= TABS =================
-tab1, tab2, tab3 = st.tabs(["🔬 Analysis", "🧠 Explainability", "📊 Benchmarks"])
+tab1, tab2, tab3 = st.tabs(["Analysis", "Explainability", "Benchmarks"])
 
 with tab1:
     if comparison_mode:
@@ -233,7 +233,7 @@ with tab2:
         st.dataframe(pd.DataFrame(table_data), use_container_width=True)
 
 with tab3:
-    st.markdown("### 🏆 Model Performance Benchmark")
+    st.markdown("### Model Performance Benchmark")
     st.markdown("JetClass Anomaly Detection Benchmark Results over 6 Million events.")
     
     benchmark_data = {
@@ -243,8 +243,8 @@ with tab3:
     st.table(pd.DataFrame(benchmark_data))
     
     st.markdown("---")
-    st.markdown("### 🌌 Representation Learning Manifold")
-    st.markdown("Precomputed t-SNE visualization of the learned latent manifold, demonstrating that the EdgeConv encoder successfully maps raw collision topologies into linearly separable clusters.")
+    st.markdown("### Representation Learning Manifold")
+    st.markdown("Precomputed t-SNE visualization of the learned latent manifold, showing partial separation between background and signal-like jet topologies.")
     
     tsne_path = "docs/latent_space_tsne.png"
     if os.path.exists(tsne_path):

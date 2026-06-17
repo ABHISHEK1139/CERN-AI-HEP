@@ -10,9 +10,12 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import matplotlib
 import numpy as np
 import torch
 from torch_geometric.loader import DataLoader
+
+matplotlib.use("Agg")
 
 logger = logging.getLogger(__name__)
 

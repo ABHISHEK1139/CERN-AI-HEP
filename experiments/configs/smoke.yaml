@@ -1,0 +1,59 @@
+# =============================================================================
+# CERN-AI Smoke-Test Configuration
+# Small synthetic run for reviewers and CI-style sanity checks.
+# =============================================================================
+
+data:
+  synthetic:
+    n_normal: 120
+    n_anomaly: 30
+    seed: 42
+    output: "data/synthetic_smoke/"
+  graphs:
+    strategy: "knn"
+    k: 8
+    delta_r: 1.5
+    output: "data/graphs_smoke/"
+
+model:
+  input_dim: 11
+  hidden_dim: 32
+  latent_dim: 16
+  num_layers: 2
+  dropout: 0.2
+  num_classes: 2
+
+training:
+  epochs: 2
+  batch_size: 32
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  patience: 3
+  max_grad_norm: 1.0
+  mixed_precision: false
+
+splits:
+  train: 0.70
+  val: 0.15
+  test: 0.15
+  seed: 42
+
+anomaly:
+  threshold_method: "percentile"
+  threshold_percentile: 95
+  threshold_sigma: 3.0
+  top_k: 20
+
+benchmark:
+  models:
+    - "gcn"
+  epochs: 2
+
+output:
+  checkpoints: "checkpoints/smoke/"
+  results: "results/smoke/"
+  figures: "reports/figures/smoke/"
+
+mlflow:
+  enabled: false
+  experiment: "cern-ai-smoke"

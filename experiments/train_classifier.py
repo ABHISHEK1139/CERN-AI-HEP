@@ -41,7 +41,7 @@ def prepare_data(config: dict, data_dir: str = None):
 
     if graphs_file.exists():
         logging.info(f"Loading existing graphs from {graphs_file}")
-        graphs = torch.load(graphs_file)
+        graphs = torch.load(graphs_file, weights_only=False)
     else:
         logging.info("No graphs found. Generating synthetic data...")
 
@@ -139,6 +139,8 @@ def main():
         learning_rate=train_config["learning_rate"],
         weight_decay=train_config["weight_decay"],
         patience=train_config["patience"],
+        max_grad_norm=train_config["max_grad_norm"],
+        checkpoint_dir=config["output"]["checkpoints"],
         use_mlflow=config["mlflow"]["enabled"],
     )
 
