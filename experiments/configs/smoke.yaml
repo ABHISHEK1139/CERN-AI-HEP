@@ -30,6 +30,8 @@ training:
   weight_decay: 0.0001
   patience: 3
   max_grad_norm: 1.0
+  # NOTE: mixed_precision is reserved for a future AMP training path;
+  # trainers currently run full precision.
   mixed_precision: false
 
 splits:
@@ -38,6 +40,8 @@ splits:
   test: 0.15
   seed: 42
 
+# Consumed by AnomalyScorer.select_threshold()/generate_report(), not by the
+# trainers (which optimize loss only).
 anomaly:
   threshold_method: "percentile"
   threshold_percentile: 95

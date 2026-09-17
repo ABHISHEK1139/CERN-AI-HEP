@@ -39,7 +39,7 @@ class GraphSAGEEncoder(nn.Module):
         self.convs.append(SAGEConv(input_dim, hidden_dim, aggr=aggr))
         self.norms.append(nn.BatchNorm1d(hidden_dim))
 
-        for _ in range(num_layers - 2):
+        for _ in range(max(num_layers - 2, 0)):
             self.convs.append(SAGEConv(hidden_dim, hidden_dim, aggr=aggr))
             self.norms.append(nn.BatchNorm1d(hidden_dim))
 
@@ -51,13 +51,16 @@ class GraphSAGEEncoder(nn.Module):
     def forward(self, x, edge_index, batch=None):
         for i, (conv, norm) in enumerate(zip(self.convs, self.norms)):
             x = conv(x, edge_index)
-            x = norm(x)
+            # BatchNorm needs >1 sample in train mode; skip it for degenerate batches.
+            x = norm(x) if x.size(0) > 1 else x
             if i < len(self.convs) - 1:
                 x = F.relu(x)
                 x = F.dropout(x, p=self.dropout, training=self.training)
         return x
 
     def encode_graph(self, x, edge_index, batch):
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
         node_emb = self.forward(x, edge_index, batch)
         return global_mean_pool(node_emb, batch) + global_max_pool(node_emb, batch)
 

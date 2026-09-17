@@ -32,11 +32,13 @@ while ($true) {
         if (Test-Path $d.Path) {
             $sizeMB = [math]::Round((Get-Item $d.Path).Length / 1MB, 1)
             Write-Host ("    [OK] {0,-16} {1,8} MB  [########################################] 100%%" -f $d.Name, $sizeMB) -ForegroundColor Green
+        } else {
+            Write-Host ("    [..] {0,-16} not present" -f $d.Name) -ForegroundColor DarkGray
         }
     }
     Write-Host ""
 
-    Write-Host "  [DOWNLOADING - 4 Parallel Streams]" -ForegroundColor Yellow
+    Write-Host "  [IN PROGRESS]" -ForegroundColor Yellow
     $totalDown = [long]0
     $totalExp = [long]0
 

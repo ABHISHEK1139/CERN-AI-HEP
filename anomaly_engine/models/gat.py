@@ -28,6 +28,11 @@ class GATEncoder(nn.Module):
         **kwargs,
     ):
         super().__init__()
+        if hidden_dim % heads != 0:
+            raise ValueError(
+                f"hidden_dim ({hidden_dim}) must be divisible by heads ({heads}) "
+                "for multi-head GAT layers."
+            )
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
@@ -40,7 +45,7 @@ class GATEncoder(nn.Module):
         self.norms.append(nn.BatchNorm1d(hidden_dim))
 
         # Middle layers
-        for _ in range(num_layers - 2):
+        for _ in range(max(num_layers - 2, 0)):
             self.convs.append(GATConv(hidden_dim, hidden_dim // heads, heads=heads, dropout=dropout))
             self.norms.append(nn.BatchNorm1d(hidden_dim))
 
@@ -53,13 +58,16 @@ class GATEncoder(nn.Module):
     def forward(self, x, edge_index, batch=None):
         for i, (conv, norm) in enumerate(zip(self.convs, self.norms)):
             x = conv(x, edge_index)
-            x = norm(x)
+            # BatchNorm needs >1 sample in train mode; skip it for degenerate batches.
+            x = norm(x) if x.size(0) > 1 else x
             if i < len(self.convs) - 1:
                 x = F.elu(x)
                 x = F.dropout(x, p=self.dropout, training=self.training)
         return x
 
     def encode_graph(self, x, edge_index, batch):
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
         node_emb = self.forward(x, edge_index, batch)
         return global_mean_pool(node_emb, batch) + global_max_pool(node_emb, batch)
 

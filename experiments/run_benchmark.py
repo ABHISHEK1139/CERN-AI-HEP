@@ -10,13 +10,11 @@ Usage:
 """
 
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
 
 import yaml
-import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -37,14 +35,33 @@ def load_config(config_path=None):
 
 def prepare_data(config, data_dir=None):
     """Prepare dataset for benchmarking."""
+    import json
+
     graph_dir = Path(data_dir) if data_dir else Path(config["data"]["graphs"]["output"])
     graphs_file = graph_dir / "graphs.pt"
+    fingerprint_file = graph_dir / "synthetic_fingerprint.json"
+
+    syn_config = config["data"]["synthetic"]
+    graph_cfg = config["data"]["graphs"]
+    fingerprint = {
+        "n_normal": syn_config["n_normal"],
+        "n_anomaly": syn_config["n_anomaly"],
+        "seed": syn_config["seed"],
+        "strategy": graph_cfg["strategy"],
+        "k": graph_cfg["k"],
+    }
+    try:
+        cached = json.loads(fingerprint_file.read_text())
+    except (OSError, ValueError):
+        cached = None
+    if cached != fingerprint and graphs_file.exists():
+        logging.info("Synthetic/graph config changed; regenerating graphs...")
+        graphs_file.unlink()
 
     if graphs_file.exists():
-        graphs = torch.load(graphs_file, weights_only=False)
+        graphs = torch.load(graphs_file, map_location="cpu", weights_only=False)
     else:
         logging.info("Generating synthetic data for benchmark...")
-        syn_config = config["data"]["synthetic"]
         gen = SyntheticEventGenerator(seed=syn_config["seed"])
         events, labels = gen.generate(
             n_normal=syn_config["n_normal"],
@@ -52,17 +69,24 @@ def prepare_data(config, data_dir=None):
         )
 
         constructor = EventGraphConstructor(
-            strategy=config["data"]["graphs"]["strategy"],
-            k=config["data"]["graphs"]["k"],
+            strategy=graph_cfg["strategy"],
+            k=graph_cfg["k"],
+            delta_r_threshold=graph_cfg.get("delta_r", 1.5),
         )
         graphs = constructor.convert_dataset(events, labels)
 
         graph_dir.mkdir(parents=True, exist_ok=True)
         torch.save(graphs, graphs_file)
+        fingerprint_file.write_text(json.dumps(fingerprint, indent=2))
 
     dataset = CollisionEventDataset(root=str(graph_dir), graphs=graphs)
+    split_cfg = config.get("splits", {})
     train_loader, val_loader, test_loader = dataset.get_loaders(
         batch_size=config["training"]["batch_size"],
+        train_ratio=split_cfg.get("train", 0.7),
+        val_ratio=split_cfg.get("val", 0.15),
+        test_ratio=split_cfg.get("test", 0.15),
+        seed=split_cfg.get("seed", 42),
     )
 
     return train_loader, val_loader, test_loader, dataset
@@ -86,7 +110,7 @@ def main():
     )
 
     config = load_config(args.config)
-    if args.epochs:
+    if args.epochs is not None:
         config["benchmark"]["epochs"] = args.epochs
 
     # Prepare data

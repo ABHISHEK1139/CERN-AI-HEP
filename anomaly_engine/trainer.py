@@ -209,6 +209,17 @@ class Trainer:
 
         return self.history
 
+    @staticmethod
+    def _require_labels(data):
+        """Return flattened long labels or raise a clear error for unlabeled batches."""
+        y = getattr(data, "y", None)
+        if y is None:
+            raise ValueError(
+                "Classification training requires data.y labels, but this batch "
+                "has y=None. Use train_autoencoder() for unsupervised graphs."
+            )
+        return y.view(-1).long()
+
     def _train_epoch_classifier(self, loader, criterion):
         self.model.train()
         total_loss = 0
@@ -220,7 +231,8 @@ class Trainer:
             self.optimizer.zero_grad()
 
             logits = self.model(data)
-            loss = criterion(logits, data.y.squeeze())
+            target = self._require_labels(data)
+            loss = criterion(logits, target)
 
             loss.backward()
             nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
@@ -228,9 +240,11 @@ class Trainer:
 
             total_loss += loss.item() * data.num_graphs
             pred = logits.argmax(dim=-1)
-            correct += (pred == data.y.squeeze()).sum().item()
+            correct += (pred == target).sum().item()
             total += data.num_graphs
 
+        if total == 0:
+            raise ValueError("Classifier training received an empty DataLoader.")
         return total_loss / total, correct / total
 
     @torch.no_grad()
@@ -243,13 +257,16 @@ class Trainer:
         for data in loader:
             data = data.to(self.device)
             logits = self.model(data)
-            loss = criterion(logits, data.y.squeeze())
+            target = self._require_labels(data)
+            loss = criterion(logits, target)
 
             total_loss += loss.item() * data.num_graphs
             pred = logits.argmax(dim=-1)
-            correct += (pred == data.y.squeeze()).sum().item()
+            correct += (pred == target).sum().item()
             total += data.num_graphs
 
+        if total == 0:
+            raise ValueError("Classifier evaluation received an empty DataLoader.")
         return total_loss / total, correct / total
 
     # ----------------------------------------------------------------
@@ -295,18 +312,21 @@ class Trainer:
         if resume:
             start_epoch, start_batch = self._load_checkpoint_with_batch(f"{run_name}_latest.pt")
             if start_batch > 0:
-                logger.info(f"Resuming within epoch {start_epoch + 1} at batch {start_batch}")
+                logger.info(f"Resuming within epoch {start_epoch} at batch {start_batch}")
                 # Tell IterableDataset to skip
                 if hasattr(train_loader.dataset, 'start_idx'):
-                    train_loader.dataset.start_idx = start_batch * train_loader.batch_size
+                    bs = getattr(train_loader, 'batch_size', 1) or 1
+                    train_loader.dataset.start_idx = start_batch * bs
 
-        for epoch in range(start_epoch + 1, epochs + 1):
+        initial_epoch = start_epoch if start_batch > 0 else start_epoch + 1
+
+        for epoch in range(initial_epoch, epochs + 1):
             train_loss = self._train_epoch_autoencoder(
                 train_loader, 
                 epoch=epoch, 
                 run_name=run_name, 
                 save_steps=save_steps, 
-                start_batch=start_batch if epoch == start_epoch + 1 else 0
+                start_batch=start_batch if (start_batch > 0 and epoch == initial_epoch) else 0
             )
             # Reset start_batch and start_idx after first epoch
             start_batch = 0
@@ -395,7 +415,8 @@ class Trainer:
         if pbar is not None:
             pbar.close()
 
-        if total == 0: return float('inf') # Prevent div by zero on empty epochs
+        if total == 0:
+            raise ValueError("Autoencoder training received an empty DataLoader.")
         return total_loss / total
 
     @torch.no_grad()
@@ -410,6 +431,8 @@ class Trainer:
             total_loss += result["loss"].item() * data.num_graphs
             total += data.num_graphs
 
+        if total == 0:
+            raise ValueError("Autoencoder validation received an empty DataLoader.")
         return total_loss / total
 
     # ----------------------------------------------------------------

@@ -38,7 +38,7 @@ class EventStatistics:
             return {"n_events": 0}
 
         # Particle multiplicities
-        multiplicities = [e["n_particles"] for e in events]
+        multiplicities = [e.get("n_particles", len(e.get("particles", []))) for e in events]
 
         # Per-type counts
         type_counts = Counter()
@@ -49,7 +49,9 @@ class EventStatistics:
         all_mass = []
 
         for event in events:
-            for p in event["particles"]:
+            for p in event.get("particles", []):
+                if "type" not in p or "pt" not in p:
+                    continue
                 type_counts[p["type"]] += 1
                 all_pt.append(p["pt"])
                 all_eta.append(p.get("eta", 0.0))
@@ -63,6 +65,21 @@ class EventStatistics:
         all_energy = np.array(all_energy)
         all_mass = np.array(all_mass)
 
+        if len(all_pt) == 0:
+            return {
+                "n_events": n_events,
+                "n_particles_total": 0,
+                "particles_per_event": {
+                    "mean": float(np.mean(multiplicities)),
+                    "std": float(np.std(multiplicities)),
+                    "min": int(np.min(multiplicities)),
+                    "max": int(np.max(multiplicities)),
+                    "median": float(np.median(multiplicities)),
+                },
+                "type_counts": {},
+                "type_fractions": {},
+            }
+
         summary = {
             "n_events": n_events,
             "n_particles_total": len(all_pt),
@@ -75,7 +92,8 @@ class EventStatistics:
             },
             "type_counts": dict(type_counts),
             "type_fractions": {
-                k: v / len(all_pt) for k, v in type_counts.items()
+                k: (v / len(all_pt) if len(all_pt) > 0 else 0.0)
+                for k, v in type_counts.items()
             },
             "pt_GeV": {
                 "mean": float(np.mean(all_pt)),
@@ -156,6 +174,10 @@ class EventStatistics:
         """
         import matplotlib.pyplot as plt
 
+        if not events:
+            logger.warning("plot_distributions received 0 events; nothing to plot.")
+            return
+
         if output_dir:
             Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -165,8 +187,10 @@ class EventStatistics:
         multiplicities = []
 
         for event in events:
-            multiplicities.append(event["n_particles"])
-            for p in event["particles"]:
+            multiplicities.append(event.get("n_particles", len(event.get("particles", []))))
+            for p in event.get("particles", []):
+                if "type" not in p or "pt" not in p:
+                    continue
                 all_pt.append(p["pt"])
                 all_eta.append(p.get("eta", 0.0))
                 all_phi.append(p.get("phi", 0.0))
@@ -175,6 +199,10 @@ class EventStatistics:
         all_pt = np.array(all_pt)
         all_eta = np.array(all_eta)
         all_phi = np.array(all_phi)
+
+        if len(all_pt) == 0:
+            logger.warning("plot_distributions found 0 particles; nothing to plot.")
+            return
 
         fig, axes = plt.subplots(2, 3, figsize=(18, 10))
         fig.suptitle("Collision Event Distributions", fontsize=16, fontweight="bold")
@@ -209,7 +237,8 @@ class EventStatistics:
 
         # 5. η-φ scatter
         ax = axes[1, 1]
-        sample_idx = np.random.choice(len(all_eta), min(5000, len(all_eta)), replace=False)
+        rng = np.random.RandomState(42)
+        sample_idx = rng.choice(len(all_eta), min(5000, len(all_eta)), replace=False)
         ax.scatter(all_eta[sample_idx], all_phi[sample_idx], s=1, alpha=0.3, c="#e67e22")
         ax.set_xlabel("η")
         ax.set_ylabel("φ")

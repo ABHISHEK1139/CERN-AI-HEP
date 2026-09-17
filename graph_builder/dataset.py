@@ -46,23 +46,29 @@ class CollisionEventDataset(InMemoryDataset):
         super().__init__(root, transform, pre_transform)
 
         if Path(self.processed_paths[0]).exists():
-            self.data, self.slices = torch.load(self.processed_paths[0], weights_only=False)
+            self.data, self.slices = torch.load(
+                self.processed_paths[0], map_location="cpu", weights_only=False
+            )
         elif graphs is not None:
+            if len(graphs) == 0:
+                raise ValueError("CollisionEventDataset received an empty graphs list.")
             self.data, self.slices = self.collate(graphs)
             # Save for future use
             Path(self.processed_dir).mkdir(parents=True, exist_ok=True)
-            torch.save((self.data, self.slices), self.processed_paths[0])
+            torch.save((self._data, self.slices), self.processed_paths[0])
         else:
             # Try loading from graphs.pt
             graphs_path = Path(root) / "graphs.pt"
             if graphs_path.exists():
-                graphs = torch.load(graphs_path, weights_only=False)
+                graphs = torch.load(graphs_path, map_location="cpu", weights_only=False)
+                if len(graphs) == 0:
+                    raise ValueError(f"{graphs_path} contains 0 graphs.")
                 self.data, self.slices = self.collate(graphs)
                 Path(self.processed_dir).mkdir(parents=True, exist_ok=True)
-                torch.save((self.data, self.slices), self.processed_paths[0])
+                torch.save((self._data, self.slices), self.processed_paths[0])
             else:
                 raise FileNotFoundError(
-                    f"No graphs found. Run graph_constructor first, or provide graphs list."
+                    "No graphs found. Run graph_constructor first, or provide graphs list."
                 )
 
     @property
@@ -116,11 +122,19 @@ class CollisionEventDataset(InMemoryDataset):
     def index_select(self, indices: List[int]) -> "CollisionEventDataset":
         """Select subset by indices, returning a new dataset."""
         graphs = [self.get(i) for i in indices]
+        if not graphs:
+            raise ValueError("index_select received empty indices.")
         subset = CollisionEventDataset.__new__(CollisionEventDataset)
+        # Preserve InMemoryDataset internals so collate()/get() keep working.
         subset.transform = self.transform
         subset.pre_transform = self.pre_transform
         subset._indices = None
-        subset.data, subset.slices = self.collate(graphs)
+        # InMemoryDataset.collate is an instance method in older PyG but a
+        # staticmethod in newer releases; support both.
+        try:
+            subset.data, subset.slices = self.collate(graphs)
+        except TypeError:
+            subset.data, subset.slices = CollisionEventDataset.collate(graphs)
         subset._data_list = None
         return subset
 
@@ -142,6 +156,12 @@ class CollisionEventDataset(InMemoryDataset):
         train_ds, val_ds, test_ds = self.get_splits(
             train_ratio, val_ratio, test_ratio, seed
         )
+        for _name, _ds in (("train", train_ds), ("val", val_ds), ("test", test_ds)):
+            if len(_ds) == 0:
+                logger.warning(
+                    f"Empty {_name} split from {len(self)} graphs "
+                    f"(ratios {train_ratio}/{val_ratio}/{test_ratio})."
+                )
 
         train_loader = DataLoader(
             train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers
@@ -167,8 +187,8 @@ class CollisionEventDataset(InMemoryDataset):
             return {"n_graphs": 0}
 
         sample = self.get(0)
-        node_dim = sample.x.shape[1] if sample.x is not None else 0
-        has_edge_attr = sample.edge_attr is not None
+        node_dim = sample.x.shape[1] if getattr(sample, "x", None) is not None else 0
+        has_edge_attr = getattr(sample, "edge_attr", None) is not None
         edge_dim = sample.edge_attr.shape[1] if has_edge_attr else 0
 
         # Collect stats
@@ -179,9 +199,13 @@ class CollisionEventDataset(InMemoryDataset):
         for i in range(n):
             g = self.get(i)
             num_nodes.append(g.num_nodes)
-            num_edges.append(g.edge_index.shape[1])
-            if g.y is not None:
-                labels.append(g.y.item())
+            ei = getattr(g, "edge_index", None)
+            num_edges.append(ei.shape[1] if ei is not None else 0)
+            if getattr(g, "y", None) is not None:
+                try:
+                    labels.append(int(g.y.flatten()[0].item()))
+                except (IndexError, ValueError, AttributeError):
+                    pass
 
         labels = np.array(labels) if labels else np.array([])
 

@@ -2,7 +2,7 @@
 # CERN-AI Makefile
 # =============================================================================
 
-.PHONY: help install data synthetic graphs train-classifier train-autoencoder benchmark clean
+.PHONY: help install download synthetic graphs train-classifier train-autoencoder benchmark clean
 
 help:
 	@echo "CERN-AI: GNN Anomaly Detection for LHC Events"
@@ -14,7 +14,7 @@ help:
 	@echo "  make train-classifier  Train GNN classifier"
 	@echo "  make train-autoencoder Train graph autoencoder"
 	@echo "  make benchmark         Run full benchmark"
-	@echo "  make clean             Remove generated data and models"
+	@echo "  make clean             Remove generated caches (asks first; never touches data/ or checkpoints/)"
 
 install:
 	pip install -r requirements.txt
@@ -33,10 +33,17 @@ train-classifier:
 	python experiments/train_classifier.py --model gcn --data data/graphs/ --epochs 100
 
 train-autoencoder:
-	python experiments/train_autoencoder.py --encoder gcn --data data/graphs/ --epochs 100
+	python experiments/train_autoencoder.py --epochs 100 --batch-size 256
 
 benchmark:
 	python experiments/run_benchmark.py --data data/graphs/
 
 clean:
-	rm -rf data/ models/ checkpoints/ mlruns/ outputs/
+	@echo "This removes generated caches and results (data/ and checkpoints/ are left alone)."
+	@read -p "Continue? [y/N] " ans; \
+	if [ "$$ans" = "y" ] || [ "$$ans" = "Y" ]; then \
+		rm -rf reports/ results/ mlruns/ outputs/ models/ .pytest_cache/; \
+		find . -name "__pycache__" -type d -prune -exec rm -rf {} +; \
+	else \
+		echo "Aborted."; \
+	fi

@@ -64,13 +64,14 @@ def train_and_eval(model, train_loader, val_loader, device):
             
     scores = np.array(all_scores)
     labels = np.array(all_labels)
-    
-    temp_auroc = roc_auc_score(labels, scores)
-    if temp_auroc < 0.5:
-        scores = -scores
-        temp_auroc = roc_auc_score(labels, scores)
-        
-    return temp_auroc
+
+    if len(np.unique(labels)) < 2:
+        return 0.5
+    # Raw AUROC, no post-hoc flip: flipping on test scores inflates the metric.
+    raw_auroc = roc_auc_score(labels, scores)
+    if raw_auroc < 0.5:
+        print(f"  Note: raw AUROC {raw_auroc:.4f} < 0.5 (inverse scoring).")
+    return raw_auroc
 
 def get_model(arch, input_dim=16, hidden_dim=64, latent_dim=32):
     if arch == "mlp":
@@ -83,6 +84,7 @@ def get_model(arch, input_dim=16, hidden_dim=64, latent_dim=32):
         enc = EdgeConvEncoder(input_dim, hidden_dim, latent_dim, num_layers=3)
         dec = GraphDecoder(latent_dim, hidden_dim, input_dim)
         return GraphAutoencoder(enc, dec)
+    raise ValueError(f"Unknown arch '{arch}'. Available: mlp, gcn, edgeconv.")
 
 def run_ablation():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -114,10 +116,21 @@ def run_ablation():
         
         print(f"\n--- Running {name} ---")
         
-        # Load data with specific k
+        # Load data with specific k.
+        # Train/val background come from one disjointly-split pool so that
+        # validation jets never leak into training (same-file resampling
+        # with a fixed seed would otherwise overlap).
         print(f"  Loading dataset with k={k}...")
-        train_dataset = JetClassDataset(root=f"data/jetclass/graphs_k{k}", root_file_paths=train_files, k_neighbors=k, sample_size=10000, tag="train_bg")
-        val_dataset_bg = JetClassDataset(root=f"data/jetclass/graphs_k{k}", root_file_paths=train_files, k_neighbors=k, sample_size=2000, tag="val_bg")
+        pool = JetClassDataset(root=f"data/jetclass/graphs_k{k}", root_file_paths=train_files, k_neighbors=k, sample_size=12000, tag="pool_bg")
+        n_pool = len(pool)
+        if n_pool < 2:
+            print(f"  Skipping {name}: only {n_pool} jets available.")
+            continue
+        n_train = min(10000, int(0.8 * n_pool))
+        n_val_bg = min(2000, n_pool - n_train)
+        perm = np.random.RandomState(42).permutation(n_pool)
+        train_dataset = pool.index_select(perm[:n_train].tolist())
+        val_dataset_bg = pool.index_select(perm[n_train:n_train + n_val_bg].tolist())
         val_dataset_sig = JetClassDataset(root=f"data/jetclass/graphs_k{k}", root_file_paths=val_files, k_neighbors=k, sample_size=2000, tag="val_sig")
         
         train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)

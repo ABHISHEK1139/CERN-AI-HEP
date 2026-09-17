@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 
 import yaml
-import numpy as np
 import torch
 
 # Add project root to path
@@ -36,17 +35,36 @@ def load_config(config_path: str = None) -> dict:
 
 def prepare_data(config: dict, data_dir: str = None):
     """Prepare dataset: generate synthetic if needed, build graphs, create loaders."""
+    import json
+
     graph_dir = Path(data_dir) if data_dir else Path(config["data"]["graphs"]["output"])
     graphs_file = graph_dir / "graphs.pt"
+    fingerprint_file = graph_dir / "synthetic_fingerprint.json"
+
+    syn_config = config["data"]["synthetic"]
+    graph_config = config["data"]["graphs"]
+    fingerprint = {
+        "n_normal": syn_config["n_normal"],
+        "n_anomaly": syn_config["n_anomaly"],
+        "seed": syn_config["seed"],
+        "strategy": graph_config["strategy"],
+        "k": graph_config["k"],
+    }
+    try:
+        cached = json.loads(fingerprint_file.read_text())
+    except (OSError, ValueError):
+        cached = None
+    if cached != fingerprint and graphs_file.exists():
+        logging.info("Synthetic/graph config changed; regenerating graphs...")
+        graphs_file.unlink()
 
     if graphs_file.exists():
         logging.info(f"Loading existing graphs from {graphs_file}")
-        graphs = torch.load(graphs_file, weights_only=False)
+        graphs = torch.load(graphs_file, map_location="cpu", weights_only=False)
     else:
         logging.info("No graphs found. Generating synthetic data...")
 
         # Generate synthetic events
-        syn_config = config["data"]["synthetic"]
         gen = SyntheticEventGenerator(seed=syn_config["seed"])
         events, labels = gen.generate(
             n_normal=syn_config["n_normal"],
@@ -54,16 +72,17 @@ def prepare_data(config: dict, data_dir: str = None):
         )
 
         # Build graphs
-        graph_config = config["data"]["graphs"]
         constructor = EventGraphConstructor(
             strategy=graph_config["strategy"],
             k=graph_config["k"],
+            delta_r_threshold=graph_config.get("delta_r", 1.5),
         )
         graphs = constructor.convert_dataset(events, labels)
 
         # Save
         graph_dir.mkdir(parents=True, exist_ok=True)
         torch.save(graphs, graphs_file)
+        fingerprint_file.write_text(json.dumps(fingerprint, indent=2))
         logging.info(f"Saved {len(graphs)} graphs to {graphs_file}")
 
     # Create dataset and loaders
@@ -102,11 +121,11 @@ def main():
 
     # Load config with CLI overrides
     config = load_config(args.config)
-    if args.epochs:
+    if args.epochs is not None:
         config["training"]["epochs"] = args.epochs
-    if args.lr:
+    if args.lr is not None:
         config["training"]["learning_rate"] = args.lr
-    if args.batch_size:
+    if args.batch_size is not None:
         config["training"]["batch_size"] = args.batch_size
 
     # Prepare data

@@ -86,10 +86,23 @@ class JetClassDataset(InMemoryDataset):
         self.sample_size = sample_size
         self.tag = tag
 
-        self._processed_file_name = f"jetclass_{tag}_{sample_size if sample_size else 'all'}.pt"
+        # Include k/max_particles AND a hash of the source file list in the cache
+        # key: reusing a k=8 cache for a k=16 ablation (or a different file set
+        # under the same tag) silently invalidates the experiment.
+        import hashlib
+
+        files_key = hashlib.md5(
+            "|".join(sorted(str(f) for f in root_file_paths)).encode()
+        ).hexdigest()[:8]
+        self._processed_file_name = (
+            f"jetclass_{tag}_{sample_size if sample_size else 'all'}"
+            f"_k{k_neighbors}_nmax{max_particles}_{files_key}.pt"
+        )
 
         super().__init__(root, transform, pre_transform)
-        self.data, self.slices = torch.load(self.processed_paths[0], weights_only=False)
+        self.data, self.slices = torch.load(
+            self.processed_paths[0], map_location="cpu", weights_only=False
+        )
 
     @property
     def raw_file_names(self):
@@ -102,8 +115,9 @@ class JetClassDataset(InMemoryDataset):
     @staticmethod
     def _build_knn_graph(pos: torch.Tensor, k: int) -> torch.Tensor:
         """
-        Build a k-NN graph from positional coordinates using pure PyTorch.
-        Uses GPU acceleration if available.
+        Build a k-NN graph from positional coordinates using pure PyTorch (CPU).
+
+        Per-jet graphs are tiny; staying on CPU avoids per-jet H2D ping-pong.
 
         Args:
             pos: Node positions [N, D].
@@ -112,20 +126,20 @@ class JetClassDataset(InMemoryDataset):
         Returns:
             edge_index: [2, N*k] tensor of directed edges (source, target) on CPU.
         """
-        # Move to GPU for fast pairwise distance computation
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        pos_dev = pos.to(device)
+        n = pos.size(0)
+        k = min(k, n - 1)
+        if k <= 0:
+            return torch.empty((2, 0), dtype=torch.long)
 
         # Pairwise L2 distances [N, N]
-        dist = torch.cdist(pos_dev, pos_dev, p=2)
+        dist = torch.cdist(pos, pos, p=2)
         # Set self-distance to infinity to exclude self-loops
         dist.fill_diagonal_(float('inf'))
         # Get k nearest neighbors for each node
         _, indices = dist.topk(k, largest=False, dim=-1)  # [N, k]
 
-        n = pos.size(0)
         # Build edge_index: source repeats, target from indices
-        source = torch.arange(n, device=device).unsqueeze(1).expand(-1, k).reshape(-1)
+        source = torch.arange(n).unsqueeze(1).expand(-1, k).reshape(-1)
         target = indices.reshape(-1)
 
         edge_index = torch.stack([source, target], dim=0).cpu()
@@ -133,27 +147,29 @@ class JetClassDataset(InMemoryDataset):
 
     def process(self):
         logger.info(f"Processing JetClass data from {len(self.root_file_paths)} file(s)...")
+        # NOTE: whole files are read into RAM here. For 100M-scale training use
+        # JetClassIterableDataset (chunked streaming) or preprocess_6m.py instead.
 
         all_features = []  # List of awkward arrays per file
         all_labels = []
 
         for fpath in self.root_file_paths:
             logger.info(f"  Reading {fpath}...")
-            file = uproot.open(fpath)
+            with uproot.open(fpath) as file:
 
-            # JetClass uses "tree" as tree name
-            tree_key = next((k for k in file.keys() if "tree" in k.lower()), None)
-            if not tree_key:
-                raise ValueError(f"Could not find 'tree' in {fpath}")
+                # JetClass uses "tree" as tree name
+                tree_key = next((k for k in file.keys() if "tree" in k.lower()), None)
+                if not tree_key:
+                    raise ValueError(f"Could not find 'tree' in {fpath}")
 
-            tree = file[tree_key]
+                tree = file[tree_key]
 
-            # Read particle features (ragged arrays: variable particles per jet)
-            feat_arrays = tree.arrays(PARTICLE_FEATURES)
-            label_arrays = tree.arrays(LABEL_BRANCHES)
+                # Read particle features (ragged arrays: variable particles per jet)
+                feat_arrays = tree.arrays(PARTICLE_FEATURES)
+                label_arrays = tree.arrays(LABEL_BRANCHES)
 
-            all_features.append(feat_arrays)
-            all_labels.append(label_arrays)
+                all_features.append(feat_arrays)
+                all_labels.append(label_arrays)
 
         # Concatenate across files
         features = ak.concatenate(all_features)
@@ -161,14 +177,19 @@ class JetClassDataset(InMemoryDataset):
 
         n_total = len(features)
         logger.info(f"Total jets across all files: {n_total}")
+        if n_total == 0:
+            raise ValueError("JetClass processing found 0 jets in the input files.")
 
-        # Sample if requested
-        if self.sample_size is not None and self.sample_size < n_total:
-            np.random.seed(42)
-            indices = np.random.choice(n_total, self.sample_size, replace=False)
-            features = features[indices]
-            labels = labels[indices]
-            logger.info(f"Sampled {self.sample_size} jets.")
+        # Sample if requested (isolated RNG: do not pollute global np.random state)
+        if self.sample_size is not None:
+            if self.sample_size < 1:
+                raise ValueError(f"sample_size must be >= 1, got {self.sample_size}.")
+            if self.sample_size < n_total:
+                rng = np.random.RandomState(42)
+                indices = rng.choice(n_total, self.sample_size, replace=False)
+                features = features[indices]
+                labels = labels[indices]
+                logger.info(f"Sampled {self.sample_size} jets.")
 
         # Determine binary labels: QCD=0, everything else=1
         is_qcd = ak.to_numpy(labels["label_QCD"]).astype(bool)
@@ -194,6 +215,8 @@ class JetClassDataset(InMemoryDataset):
 
             # Stack into [n_particles, 16]
             node_feats = np.stack(node_feats, axis=-1)
+            # Sanitize: NaN/inf poisons MSE loss; zero-padding check must ignore them
+            node_feats = np.nan_to_num(node_feats, nan=0.0, posinf=0.0, neginf=0.0)
 
             # Remove zero-padded particles (all features = 0)
             mask = np.any(node_feats != 0, axis=-1)
@@ -203,9 +226,12 @@ class JetClassDataset(InMemoryDataset):
             if n_particles < 2:
                 continue  # Skip jets with fewer than 2 particles
 
-            # Trim to max_particles
+            # Trim to max_particles, keeping highest-pT constituents
+            # (pT = hypot(px, py) from cols 0,1) instead of arbitrary first-N.
             if n_particles > self.max_particles:
-                node_feats = node_feats[:self.max_particles]
+                pt = np.hypot(node_feats[:, 0], node_feats[:, 1])
+                keep = np.argsort(pt)[::-1][:self.max_particles]
+                node_feats = node_feats[np.sort(keep)]
                 n_particles = self.max_particles
 
             x = torch.tensor(node_feats, dtype=torch.float)
@@ -256,11 +282,16 @@ class JetClassDataset(InMemoryDataset):
 
     def index_select(self, indices: List[int]) -> "JetClassDataset":
         graphs = [self.get(i) for i in indices]
+        if not graphs:
+            raise ValueError("index_select received empty indices.")
         subset = JetClassDataset.__new__(JetClassDataset)
         subset.transform = self.transform
         subset.pre_transform = self.pre_transform
         subset._indices = None
-        subset.data, subset.slices = self.collate(graphs)
+        try:
+            subset.data, subset.slices = self.collate(graphs)
+        except TypeError:
+            subset.data, subset.slices = JetClassDataset.collate(graphs)
         subset._data_list = None
         return subset
 
@@ -276,6 +307,12 @@ class JetClassDataset(InMemoryDataset):
         train_ds, val_ds, test_ds = self.get_splits(
             train_ratio, val_ratio, test_ratio, seed
         )
+        for _name, _ds in (("train", train_ds), ("val", val_ds), ("test", test_ds)):
+            if len(_ds) == 0:
+                logger.warning(
+                    f"Empty {_name} split from {len(self)} jets "
+                    f"(ratios {train_ratio}/{val_ratio}/{test_ratio})."
+                )
 
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
         val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)

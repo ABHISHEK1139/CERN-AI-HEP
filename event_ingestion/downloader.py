@@ -133,12 +133,18 @@ class CMSDataDownloader:
         else:
             url = f"https://opendata.cern.ch{uri}"
 
-        filename = Path(uri).name
+        filename = Path(uri.split("?")[0]).name or "download.root"
+        # Sanitize Windows-illegal characters from query-derived names
+        filename = "".join(c for c in filename if c not in '<>:"/\\|?*').strip() or "download.root"
         output_path = output_dir / filename
 
         if output_path.exists():
-            logger.info(f"File already exists: {output_path}")
-            return output_path
+            size = output_path.stat().st_size
+            if size > 0:
+                logger.info(f"File already exists: {output_path} ({size} bytes)")
+                return output_path
+            logger.warning(f"Removing zero-byte partial download: {output_path}")
+            output_path.unlink()
 
         logger.info(f"Downloading {url} -> {output_path}")
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -162,10 +168,13 @@ class CMSDataDownloader:
                             break
                         f.write(chunk)
 
-        except urllib.error.URLError as e:
+        except Exception as e:
             logger.error(f"Download failed: {e}")
             if output_path.exists():
-                output_path.unlink()
+                try:
+                    output_path.unlink()
+                except OSError:
+                    pass
             raise
 
         size_mb = output_path.stat().st_size / 1024 / 1024
@@ -212,8 +221,12 @@ class CMSDataDownloader:
         # Download up to max_files
         downloaded = []
         for file_info in files[:max_files]:
+            uri = file_info.get("uri", "")
+            if not uri:
+                logger.warning(f"Skipping record entry without URI: {file_info}")
+                continue
             path = self.download_file(
-                file_info["uri"],
+                uri,
                 self.config.raw_dir / dataset_key,
                 max_size_mb=max_size_mb,
             )

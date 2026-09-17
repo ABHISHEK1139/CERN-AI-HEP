@@ -7,6 +7,7 @@ Provides a unified interface to instantiate any model by name.
 from anomaly_engine.models.gcn import GCNClassifier, GCNEncoder
 from anomaly_engine.models.graphsage import GraphSAGEClassifier, GraphSAGEEncoder
 from anomaly_engine.models.gat import GATClassifier, GATEncoder
+from anomaly_engine.models.edge_conv import EdgeConvEncoder
 from anomaly_engine.models.baselines import MLPClassifier, CNNClassifier
 from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
 
@@ -24,7 +25,11 @@ ENCODERS = {
     "gcn": GCNEncoder,
     "graphsage": GraphSAGEEncoder,
     "gat": GATEncoder,
+    "edgeconv": EdgeConvEncoder,
 }
+# NOTE: "edgeconv" is encoder-only (EdgeConvEncoder); there is no EdgeConv
+# classifier, so CLASSIFIERS intentionally omits it. Pair the encoder with
+# GraphDecoder via get_autoencoder("edgeconv", ...) for anomaly detection.
 
 
 def get_classifier(name: str, **kwargs):
@@ -42,7 +47,12 @@ def get_encoder(name: str, **kwargs):
 
 
 def get_autoencoder(encoder_name: str, **kwargs):
-    """Get autoencoder with specified encoder architecture."""
+    """Get autoencoder with specified encoder architecture.
+
+    NOTE: all **kwargs go to the encoder; the decoder only takes
+    latent_dim/hidden_dim/input_dim from the same kwargs. Pass
+    classifier-only args (e.g. num_classes) to get_classifier instead.
+    """
     encoder = get_encoder(encoder_name, **kwargs)
     decoder = GraphDecoder(
         latent_dim=kwargs.get("latent_dim", 32),
@@ -56,6 +66,7 @@ __all__ = [
     "GCNClassifier", "GCNEncoder",
     "GraphSAGEClassifier", "GraphSAGEEncoder",
     "GATClassifier", "GATEncoder",
+    "EdgeConvEncoder",
     "MLPClassifier", "CNNClassifier",
     "GraphAutoencoder", "GraphDecoder",
     "get_classifier", "get_encoder", "get_autoencoder",

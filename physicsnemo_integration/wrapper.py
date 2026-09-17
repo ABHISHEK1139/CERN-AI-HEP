@@ -52,9 +52,10 @@ class PhysicsNeMoWrapper(nn.Module):
                 self._init_physicsnemo(input_dim, hidden_dim, latent_dim, num_layers)
                 self._physicsnemo_available = True
                 logger.info("Using PhysicsNeMo MeshGraphNet backend")
-            except ImportError:
+            except Exception as e:  # ImportError, arity/config errors, missing CUDA, ...
                 logger.warning(
-                    "PhysicsNeMo not installed. "
+                    "PhysicsNeMo backend unavailable "
+                    f"({type(e).__name__}: {e}). "
                     "Install with: pip install nvidia-physicsnemo\n"
                     "Falling back to PyG MeshGraphNet-style architecture."
                 )
@@ -133,8 +134,10 @@ class PhysicsNeMoWrapper(nn.Module):
         """Encode graph to a single vector."""
         x = data.x
         edge_index = data.edge_index
-        edge_attr = data.edge_attr
-        batch = data.batch
+        edge_attr = getattr(data, "edge_attr", None)
+        batch = getattr(data, "batch", None)
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
 
         if self._physicsnemo_available:
             # PhysicsNeMo path
@@ -203,9 +206,15 @@ class MeshGraphNetLayer(nn.Module):
         """
         Args:
             x: Node features [N, hidden_dim].
-            edge_index: Edge indices [2, E].
+            edge_index: Edge indices [2, E], or None for edgeless graphs.
             edge_attr: Edge features [E, hidden_dim] or None.
         """
+        if edge_index is None:
+            # Edgeless graph: no messages; node-only update with zero messages.
+            node_update = self.node_mlp(
+                torch.cat([x, torch.zeros_like(x)], dim=-1)
+            )
+            return self.node_norm(x + self.dropout(node_update))
         src, dst = edge_index
 
         # Edge update

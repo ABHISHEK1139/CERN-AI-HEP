@@ -1,9 +1,13 @@
 import argparse
 import logging
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import torch
 import torch_geometric
+import numpy as np
 from graph_builder.lhco_dataset import LHCODataset
 from anomaly_engine.models.gcn import GCNEncoder
 from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
@@ -43,12 +47,14 @@ def main():
     train_loader, val_loader, bg_test_loader = bg_dataset.get_loaders(
         batch_size=args.batch_size, train_ratio=0.8, val_ratio=0.1, test_ratio=0.1
     )
-    
-    # Combine bg_test and sig_test for final evaluation
-    import numpy as np
-    mixed_idx = np.concatenate([bg_idx[int(0.9 * len(bg_idx)):], sig_idx])
-    mixed_test_dataset = dataset.index_select(mixed_idx.tolist())
-    test_loader = torch_geometric.loader.DataLoader(mixed_test_dataset, batch_size=args.batch_size, shuffle=False)
+
+    # Combine held-out bg test split and all signal for final evaluation
+    # (uses the disjoint bg_test split from get_loaders, avoiding train/test leakage)
+    from torch_geometric.data import Batch
+    bg_test_graphs = [bg_test_loader.dataset.get(i) for i in range(len(bg_test_loader.dataset))]
+    sig_graphs = [dataset.get(i) for i in sig_idx]
+    mixed_test_graphs = bg_test_graphs + sig_graphs
+    test_loader = torch_geometric.loader.DataLoader(mixed_test_graphs, batch_size=args.batch_size, shuffle=False)
 
     # Initialize model
     # LHCO jets have 7 features: px, py, pz, m, tau1, tau2, tau3

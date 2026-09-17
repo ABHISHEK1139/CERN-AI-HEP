@@ -52,7 +52,7 @@ class EdgeConvEncoder(nn.Module):
         self.norms.append(nn.BatchNorm1d(hidden_dim))
 
         # Hidden layers
-        for _ in range(num_layers - 2):
+        for _ in range(max(num_layers - 2, 0)):
             mlp_hidden = nn.Sequential(
                 nn.Linear(2 * hidden_dim, hidden_dim),
                 nn.ReLU(),
@@ -88,7 +88,9 @@ class EdgeConvEncoder(nn.Module):
         """
         for i, (conv, norm) in enumerate(zip(self.convs, self.norms)):
             x = conv(x, edge_index)
-            x = norm(x)
+            # BatchNorm needs >1 sample in train mode; skip it for degenerate batches.
+            # (Graphs with <2 particles are filtered upstream; this guards batch_size=1.)
+            x = norm(x) if x.size(0) > 1 else x
             if i < len(self.convs) - 1:
                 x = F.relu(x)
                 x = F.dropout(x, p=self.dropout, training=self.training)
@@ -102,6 +104,8 @@ class EdgeConvEncoder(nn.Module):
         Returns:
             Graph embedding [B, latent_dim].
         """
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
         node_emb = self.forward(x, edge_index, batch)
         # Combine mean and max pooling for robust global representation
         graph_emb = global_mean_pool(node_emb, batch) + global_max_pool(node_emb, batch)

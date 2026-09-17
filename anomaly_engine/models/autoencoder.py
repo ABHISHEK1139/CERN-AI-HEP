@@ -31,6 +31,7 @@ class GraphDecoder(nn.Module):
         output_dim: int = 11,
     ):
         super().__init__()
+        self.output_dim = output_dim
         self.decoder = nn.Sequential(
             nn.Linear(latent_dim, hidden_dim),
             nn.ReLU(),
@@ -70,6 +71,13 @@ class GraphAutoencoder(nn.Module):
             decoder: GraphDecoder instance.
         """
         super().__init__()
+        enc_in = getattr(encoder, "input_dim", None)
+        dec_out = getattr(decoder, "output_dim", None)
+        if enc_in is not None and dec_out is not None and enc_in != dec_out:
+            raise ValueError(
+                f"Encoder input_dim ({enc_in}) != decoder output_dim ({dec_out}). "
+                "Reconstruction requires matching feature dimensions."
+            )
         self.encoder = encoder
         self.decoder = decoder
 
@@ -142,10 +150,20 @@ class GraphAutoencoder(nn.Module):
             Latent vectors [B, latent_dim].
         """
         with torch.no_grad():
-            z = self.encoder(data.x, data.edge_index, data.batch)
-            return global_mean_pool(z, data.batch)
+            batch = getattr(data, "batch", None)
+            if batch is None:
+                batch = torch.zeros(
+                    data.x.size(0), dtype=torch.long, device=data.x.device
+                )
+            z = self.encoder(data.x, data.edge_index, batch)
+            return global_mean_pool(z, batch)
 
     def encode_nodes(self, data) -> torch.Tensor:
         """Get per-node latent representations."""
         with torch.no_grad():
-            return self.encoder(data.x, data.edge_index, data.batch)
+            batch = getattr(data, "batch", None)
+            if batch is None:
+                batch = torch.zeros(
+                    data.x.size(0), dtype=torch.long, device=data.x.device
+                )
+            return self.encoder(data.x, data.edge_index, batch)

@@ -175,7 +175,7 @@ class PhysicsNeMoBenchmark:
         import json
         from pathlib import Path
 
-        # Convert numpy types
+        # Convert numpy/torch types
         def convert(obj):
             if isinstance(obj, (np.integer,)):
                 return int(obj)
@@ -183,6 +183,8 @@ class PhysicsNeMoBenchmark:
                 return float(obj)
             if isinstance(obj, np.ndarray):
                 return obj.tolist()
+            if isinstance(obj, torch.Tensor):
+                return obj.detach().cpu().tolist()
             return obj
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)

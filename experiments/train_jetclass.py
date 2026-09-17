@@ -1,11 +1,11 @@
 """
 Train Graph Autoencoder on JetClass particle clouds.
 
-Strategy:
-    - Background: QCD jets (Standard Model, label=0)
-    - Signal: Higgs/W/Z/Top jets (BSM-like, label=1)
+Strategy (QCD-vs-non-QCD ranking benchmark, not BSM discovery):
+    - Background proxy: QCD jets (Standard Model, label=0)
+    - Non-QCD proxy: Higgs/W/Z/Top jets (other known SM classes, label=1)
     - Train autoencoder on QCD background only
-    - Evaluate anomaly detection on mixed QCD + signal test set
+    - Evaluate anomaly-ranking on mixed QCD + non-QCD test set
 
 Usage:
     python experiments/train_jetclass.py --epochs 50 --sample 5000
@@ -14,7 +14,10 @@ Usage:
 
 import argparse
 import logging
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import torch
 import numpy as np
@@ -53,7 +56,13 @@ def main():
         # Large-scale iterable dataset
         bg_files = sorted(Path("data/jetclass").glob("ZJetsToNuNu_*.root"))
         sig_files = sorted(Path("data/jetclass").glob("HTo*.root"))
-        
+
+        if not bg_files:
+            raise FileNotFoundError(
+                "Large mode requires data/jetclass/ZJetsToNuNu_*.root. "
+                "Download JetClass data first (see README / scripts/)."
+            )
+
         logger.info(f"Large-scale mode: Found {len(bg_files)} background files and {len(sig_files)} signal files.")
         
         # In large mode, we don't have validation splits out-of-the-box in the iterable dataset.
@@ -90,8 +99,16 @@ def main():
             tag="higgs_sig_val",
         )
         
-        val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
-        mixed_test = torch.utils.data.ConcatDataset([val_dataset, sig_dataset])
+        # Split the QCD validation pool into disjoint val / test-background halves
+        # so validation graphs never leak into the reported test set.
+        n_val = len(val_dataset)
+        if n_val < 2:
+            raise ValueError(f"Need >= 2 validation jets, got {n_val}.")
+        half = n_val // 2
+        bg_val_ds = val_dataset.index_select(list(range(half)))
+        bg_test_ds = val_dataset.index_select(list(range(half, n_val)))
+        val_loader = DataLoader(bg_val_ds, batch_size=args.batch_size, shuffle=False)
+        mixed_test = torch.utils.data.ConcatDataset([bg_test_ds, sig_dataset])
         test_loader = DataLoader(mixed_test, batch_size=args.batch_size, shuffle=False)
         
     else:
@@ -103,7 +120,7 @@ def main():
             raise FileNotFoundError("No ZJetsToNuNu background files found in data/jetclass/val_5M/")
 
         bg_sample = args.sample
-        sig_sample = int(args.sample * 0.2) if args.sample else None
+        sig_sample = max(1, int(args.sample * 0.2)) if args.sample else None
 
         bg_dataset = JetClassDataset(
             root="data/jetclass/graphs",
@@ -196,24 +213,29 @@ def main():
     scores = np.array(all_scores)
     labels = np.array(all_labels)
 
-    # In JetClass, QCD background (label 0) is often harder to reconstruct than Higgs signal (label 1).
-    # If the AUROC is < 0.5, it means the model is separating them but the scoring convention is flipped.
-    # We will flip the scores for the plots.
+    # Report the RAW test AUROC first: post-hoc flipping on test scores would
+    # inflate the metric (the flip rule must be fixed a priori to be valid).
+    # Plots below may use direction-corrected scores, clearly labeled as such.
     from sklearn.metrics import roc_auc_score
-    temp_auroc = roc_auc_score(labels, scores)
-    if temp_auroc < 0.5:
-        logger.info(f"Flipping scores (Original AUROC {temp_auroc:.4f} < 0.5)")
-        scores = -scores
-        # Re-evaluate with flipped scores
-        evaluator.plot_roc_curve(labels, scores, f"{args.arch.upper()} Autoencoder (JetClass)", f"results/jetclass_{args.arch}_roc.png")
-        evaluator.plot_score_distributions(scores, labels, f"results/jetclass_{args.arch}_scores.png")
-        
-        # Log the flipped AUROC
-        flipped_auroc = roc_auc_score(labels, scores)
-        logger.info(f"Corrected AUROC: {flipped_auroc:.4f}")
+    if len(np.unique(labels)) < 2:
+        logger.warning("Single-class test set; skipping AUROC computation.")
+        raw_auroc = 0.5
     else:
-        evaluator.plot_roc_curve(labels, scores, f"{args.arch.upper()} Autoencoder (JetClass)", f"results/jetclass_{args.arch}_roc.png")
-        evaluator.plot_score_distributions(scores, labels, f"results/jetclass_{args.arch}_scores.png")
+        raw_auroc = roc_auc_score(labels, scores)
+    logger.info(f"Raw test AUROC (no flip): {raw_auroc:.4f}")
+    if raw_auroc < 0.5:
+        logger.warning(
+            "Raw AUROC < 0.5: the model separates the classes but scores them "
+            "inversely (background reconstructs worse than signal). Plots use "
+            "direction-corrected scores; headline number stays the raw value."
+        )
+        plot_scores = -scores
+        plot_suffix = " (direction-corrected)"
+    else:
+        plot_scores = scores
+        plot_suffix = ""
+    evaluator.plot_roc_curve(labels, plot_scores, f"{args.arch.upper()} Autoencoder (JetClass){plot_suffix}", f"results/jetclass_{args.arch}_roc.png")
+    evaluator.plot_score_distributions(plot_scores, labels, f"results/jetclass_{args.arch}_scores.png")
 
     logger.info("Done!")
 

@@ -71,7 +71,11 @@ EDGE_FEATURE_DIM = 4
 
 @dataclass
 class EventConfig:
-    """Configuration for event data loading and processing."""
+    """Configuration for event data loading and processing.
+
+    NOTE: default paths are relative to the repository root — run scripts
+    from the repo root (or set PYTHONPATH=.) so data/ resolves correctly.
+    """
 
     # Data paths
     data_dir: Path = field(default_factory=lambda: Path("data"))
@@ -105,6 +109,32 @@ class EventConfig:
     particle_types: List[str] = field(
         default_factory=lambda: ["Muon", "Electron", "Photon", "Jet", "MET"]
     )
+
+    def __post_init__(self):
+        """Validate configuration values early with clear errors."""
+        if self.graph_strategy not in ("knn", "fully_connected", "delta_r"):
+            raise ValueError(
+                f"graph_strategy must be knn/fully_connected/delta_r, "
+                f"got '{self.graph_strategy}'."
+            )
+        if self.knn_k < 1:
+            raise ValueError(f"knn_k must be >= 1, got {self.knn_k}.")
+        if self.delta_r_threshold <= 0:
+            raise ValueError(
+                f"delta_r_threshold must be > 0, got {self.delta_r_threshold}."
+            )
+        if self.min_particles < 2:
+            raise ValueError(
+                f"min_particles must be >= 2 (need edges), got {self.min_particles}."
+            )
+        if self.max_particles < self.min_particles:
+            raise ValueError(
+                f"max_particles ({self.max_particles}) < min_particles "
+                f"({self.min_particles})."
+            )
+        unknown = set(self.particle_types) - set(PARTICLE_FEATURES)
+        if unknown:
+            raise ValueError(f"Unknown particle_types: {sorted(unknown)}.")
 
     def ensure_dirs(self):
         """Create all data directories."""

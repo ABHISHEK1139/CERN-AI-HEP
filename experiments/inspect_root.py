@@ -1,6 +1,14 @@
-import uproot
+import sys
+from pathlib import Path
+
+try:
+    import uproot
+except ImportError:
+    sys.exit("uproot not installed. Run: pip install -r requirements.txt")
 
 path = "data/cms/higgs/GluGluToHToTauTau.root"
+if not Path(path).exists():
+    sys.exit(f"Missing {path}. Download CMS Open Data first (see README / scripts/).")
 with uproot.open(path) as file:
     print("Keys in ROOT file:", file.keys())
     # Find the main tree

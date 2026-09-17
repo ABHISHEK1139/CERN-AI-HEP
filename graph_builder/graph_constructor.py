@@ -19,8 +19,9 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import torch
+from torch_geometric.data import Data
 
-from event_ingestion.config import EventConfig, EDGE_FEATURE_DIM, NODE_FEATURE_DIM
+from event_ingestion.config import EventConfig
 from graph_builder.features import FeatureExtractor
 
 logger = logging.getLogger(__name__)
@@ -50,11 +51,16 @@ class EventGraphConstructor:
         self.delta_r_threshold = delta_r_threshold
         self.include_edge_features = include_edge_features
         self.config = config or EventConfig()
+        # NOTE: FeatureExtractor.fit()/transform() standardization exists but is
+        # intentionally NOT applied in the default pipeline (checkpoints were
+        # trained on raw log-pT features). Call fit() on training features and
+        # transform() before collation if you want the standardized variant,
+        # but retrain — do not mix standardized inputs with existing weights.
         self.feature_extractor = FeatureExtractor()
 
     def event_to_graph(
         self, event: Dict[str, Any], label: Optional[int] = None
-    ) -> "torch_geometric.data.Data":
+    ) -> Optional[Data]:
         """
         Convert a single event to a PyTorch Geometric Data object.
 
@@ -65,11 +71,15 @@ class EventGraphConstructor:
         Returns:
             PyG Data object with node features, edge_index, edge_attr, and label.
         """
-        from torch_geometric.data import Data
 
+        if "particles" not in event:
+            raise KeyError(f"event_to_graph requires 'particles', got keys {sorted(event.keys())}")
         particles = event["particles"]
         n_particles = len(particles)
 
+        # Hard graph minimum: <2 particles cannot form edges. (This is distinct
+        # from EventConfig.min_particles, which is a physics selection cut
+        # applied upstream in the loader.)
         if n_particles < 2:
             # Need at least 2 particles to form edges
             logger.warning(f"Event {event.get('event_id', '?')}: only {n_particles} particles, skipping")
@@ -80,6 +90,8 @@ class EventGraphConstructor:
         x = torch.tensor(x, dtype=torch.float32)
 
         # ---- Edge construction ----
+        if self.k <= 0:
+            raise ValueError(f"k must be >= 1 for kNN graphs, got k={self.k}.")
         if self.strategy == "knn":
             edge_index = self._build_knn_edges(particles, min(self.k, n_particles - 1))
         elif self.strategy == "fully_connected":
@@ -119,8 +131,11 @@ class EventGraphConstructor:
                 [1 if event["is_anomaly"] else 0], dtype=torch.long
             )
 
-        # Metadata
-        data.event_id = event.get("event_id", -1)
+        # Metadata (int event_id keeps PyG Batch collation well-defined)
+        try:
+            data.event_id = int(event.get("event_id", -1))
+        except (TypeError, ValueError):
+            data.event_id = -1
 
         return data
 
@@ -145,8 +160,8 @@ class EventGraphConstructor:
                 src.append(j)
                 dst.append(i)
 
-        # Remove duplicates
-        edges = set(zip(src, dst))
+        # Remove duplicates (sorted for deterministic edge order across runs)
+        edges = sorted(set(zip(src, dst)))
         if edges:
             src, dst = zip(*edges)
             return np.array([list(src), list(dst)])
@@ -210,10 +225,44 @@ class EventGraphConstructor:
             if (i + 1) % 1000 == 0:
                 logger.info(f"Converted {i + 1}/{len(events)} events to graphs")
 
+        if not graphs and events:
+            logger.warning("All events skipped (e.g. <2 particles each); no graphs built.")
         logger.info(
             f"Converted {len(graphs)} events to graphs "
             f"(skipped {n_skipped})"
         )
+        return graphs
+
+    def save_dataset(
+        self,
+        events: List[Dict[str, Any]],
+        labels: Optional[np.ndarray] = None,
+        output_dir: Union[str, Path] = ".",
+    ) -> List[Data]:
+        """
+        Convert events and save synchronized graphs.pt and labels.pt to output_dir.
+
+        Args:
+            events: List of event dicts.
+            labels: Optional label array.
+            output_dir: Directory path where graphs.pt and labels.pt are saved.
+
+        Returns:
+            List of successfully built PyG Data objects.
+        """
+        graphs = self.convert_dataset(events, labels)
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        if not graphs:
+            logger.warning("No graphs built (all events skipped). Nothing to save.")
+            return []
+
+        torch.save(graphs, output_path / "graphs.pt")
+        valid_labels = [int(g.y.item()) for g in graphs if hasattr(g, "y") and g.y is not None]
+        if len(valid_labels) == len(graphs):
+            torch.save(torch.tensor(valid_labels, dtype=torch.long), output_path / "labels.pt")
+
         return graphs
 
 
@@ -248,8 +297,11 @@ def main():
     all_events = []
     all_labels = []
     for f in data_files:
-        if f.suffix == ".npz":
+        if f.suffix.lower() == ".npz":
             data = np.load(f, allow_pickle=True)
+            if "events" not in data or "labels" not in data:
+                print(f"Skipping {f}: expected 'events'/'labels' arrays.")
+                continue
             events = data["events"].tolist()
             labels = data["labels"]
             all_events.extend(events)
@@ -265,14 +317,12 @@ def main():
     constructor = EventGraphConstructor(
         strategy=args.strategy, k=args.k, delta_r_threshold=args.delta_r
     )
-    graphs = constructor.convert_dataset(all_events, labels)
-
-    # Save
     output_path = Path(args.output)
-    output_path.mkdir(parents=True, exist_ok=True)
+    graphs = constructor.save_dataset(all_events, labels, output_path)
 
-    torch.save(graphs, output_path / "graphs.pt")
-    torch.save(labels, output_path / "labels.pt")
+    if not graphs:
+        print("No graphs built (all events skipped). Nothing to save.")
+        return
 
     print(f"\nSaved {len(graphs)} graphs to {output_path / 'graphs.pt'}")
     print(f"Node feature dim: {graphs[0].x.shape[1]}")
