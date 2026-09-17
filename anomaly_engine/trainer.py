@@ -220,7 +220,9 @@ class Trainer:
             self.optimizer.zero_grad()
 
             logits = self.model(data)
-            loss = criterion(logits, data.y.squeeze())
+            target = data.y.view(-1).long()
+
+            loss = criterion(logits, target)
 
             loss.backward()
             nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
@@ -228,9 +230,11 @@ class Trainer:
 
             total_loss += loss.item() * data.num_graphs
             pred = logits.argmax(dim=-1)
-            correct += (pred == data.y.squeeze()).sum().item()
+            correct += (pred == target).sum().item()
             total += data.num_graphs
 
+        if total == 0:
+            return 0.0, 0.0
         return total_loss / total, correct / total
 
     @torch.no_grad()
@@ -243,13 +247,16 @@ class Trainer:
         for data in loader:
             data = data.to(self.device)
             logits = self.model(data)
-            loss = criterion(logits, data.y.squeeze())
+            target = data.y.view(-1).long()
+            loss = criterion(logits, target)
 
             total_loss += loss.item() * data.num_graphs
             pred = logits.argmax(dim=-1)
-            correct += (pred == data.y.squeeze()).sum().item()
+            correct += (pred == target).sum().item()
             total += data.num_graphs
 
+        if total == 0:
+            return 0.0, 0.0
         return total_loss / total, correct / total
 
     # ----------------------------------------------------------------
@@ -410,6 +417,8 @@ class Trainer:
             total_loss += result["loss"].item() * data.num_graphs
             total += data.num_graphs
 
+        if total == 0:
+            return float("inf")
         return total_loss / total
 
     # ----------------------------------------------------------------

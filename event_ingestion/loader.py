@@ -58,10 +58,27 @@ class EventLoader:
             )
 
         filepath = Path(filepath)
+        if not filepath.exists():
+            raise FileNotFoundError(f"ROOT file not found: {filepath}")
         logger.info(f"Loading ROOT file: {filepath}")
 
         with uproot.open(filepath) as f:
-            tree = f[tree_name]
+            # Handle cycle suffixes ("Events;1") and exact names
+            if tree_name in f:
+                tree = f[tree_name]
+            else:
+                tree_key = next(
+                    (k for k in f.keys() if k.split(";")[0] == tree_name), None
+                )
+                if tree_key is None:
+                    # Fallback: any key containing the name (e.g. "Events")
+                    tree_key = next((k for k in f.keys() if tree_name in k), None)
+                if tree_key is None:
+                    raise KeyError(
+                        f"Tree '{tree_name}' not found in {filepath}. "
+                        f"Available: {list(f.keys())}"
+                    )
+                tree = f[tree_key]
             available_branches = tree.keys()
 
             # Collect branches we need
@@ -116,10 +133,18 @@ class EventLoader:
                 continue
 
             pts = ak.to_numpy(arrays[pt_branch][idx])
+            # MET branches can be scalars per event, not arrays
+            if np.isscalar(pts) or getattr(pts, "ndim", 1) == 0:
+                pts = np.atleast_1d(pts)
             n_particles = len(pts)
 
             for j in range(n_particles):
-                pt = float(pts[j])
+                try:
+                    pt = float(pts[j])
+                except (TypeError, ValueError):
+                    continue
+                if not np.isfinite(pt):
+                    continue
 
                 # Apply pT cut
                 if pt < self.config.min_pt.get(ptype, 0.0):
@@ -138,18 +163,36 @@ class EventLoader:
                     branch = f"{ptype}_{feat}"
                     if branch in arrays.fields:
                         val = arrays[branch][idx]
-                        if hasattr(val, "__len__") and j < len(val):
-                            particle[feat] = float(val[j])
-                        elif not hasattr(val, "__len__"):
-                            particle[feat] = float(val)
+                        try:
+                            if hasattr(val, "__len__") and not isinstance(val, (str, bytes)) and j < len(val):
+                                particle[feat] = float(val[j])
+                            elif not hasattr(val, "__len__"):
+                                particle[feat] = float(val)
+                        except (TypeError, ValueError):
+                            continue
 
-                # Compute energy from pT, eta, mass (if available)
+                # Sanitize + compute energy from pT, eta, mass (if available)
+                for _k in ("eta", "phi", "mass"):
+                    _v = particle.get(_k, 0.0)
+                    try:
+                        _v = float(_v)
+                    except (TypeError, ValueError):
+                        _v = 0.0
+                    particle[_k] = _v if np.isfinite(_v) else 0.0
                 if "eta" in particle and "mass" in particle:
                     eta = particle["eta"]
                     mass = particle["mass"]
-                    particle["energy"] = float(
-                        np.sqrt(pt**2 * np.cosh(eta) ** 2 + mass**2)
-                    )
+                    # Clip |eta| to avoid cosh overflow -> inf energy
+                    eta = float(np.clip(eta, -5.0, 5.0))
+                    particle["eta"] = eta
+                    try:
+                        particle["energy"] = float(
+                            np.sqrt(pt**2 * np.cosh(eta) ** 2 + mass**2)
+                        )
+                        if not np.isfinite(particle["energy"]):
+                            particle["energy"] = pt
+                    except (OverflowError, ValueError):
+                        particle["energy"] = pt
                 else:
                     particle["energy"] = pt  # fallback
 
@@ -194,9 +237,16 @@ class EventLoader:
             List of event dicts.
         """
         filepath = Path(filepath)
+        if not filepath.exists():
+            raise FileNotFoundError(f"Synthetic file not found: {filepath}")
         logger.info(f"Loading synthetic data: {filepath}")
 
-        data = np.load(filepath, allow_pickle=True)
+        try:
+            data = np.load(filepath, allow_pickle=True)
+        except Exception as e:
+            raise ValueError(f"Could not load {filepath}: {e}")
+        if "events" not in data:
+            raise KeyError(f"{filepath} has no 'events' array (keys: {list(data.keys())}).")
         events = data["events"].tolist()
 
         logger.info(f"Loaded {len(events)} synthetic events")
@@ -223,9 +273,10 @@ class EventLoader:
         """
         filepath = Path(filepath)
 
-        if filepath.suffix == ".root":
+        suffix = filepath.suffix.lower()
+        if suffix == ".root":
             return self.load_root(filepath, max_events=max_events)
-        elif filepath.suffix == ".npz":
+        elif suffix == ".npz":
             events = self.load_synthetic(filepath)
             if max_events:
                 events = events[:max_events]

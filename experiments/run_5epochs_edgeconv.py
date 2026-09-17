@@ -22,14 +22,16 @@ class BatchData:
         self.edge_index = edge_index
 
 class FastChunkedDataset:
-    def __init__(self, chunk_files, batch_size=2048, device='cuda'):
+    def __init__(self, chunk_files, batch_size=2048, device=None):
         self.chunk_files = chunk_files
         self.batch_size = batch_size
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
-        
+
     def __iter__(self):
         for fpath in self.chunk_files:
-            chunk = torch.load(fpath, weights_only=True)
+            chunk = torch.load(fpath, map_location=self.device, weights_only=True)
             x_all = chunk['x'].to(self.device)
             lengths = chunk['lengths'].to(self.device)
             y_all = chunk['y'].to(self.device)
@@ -91,8 +93,10 @@ def evaluate(model, val_loader, device):
             
     scores = np.array(all_scores)
     labels = np.array(all_labels)
-    
+
     from sklearn.metrics import roc_auc_score
+    if len(np.unique(labels)) < 2:
+        return 0.5
     temp_auroc = roc_auc_score(labels, scores)
     if temp_auroc < 0.5:
         scores = -scores
@@ -123,7 +127,8 @@ def main():
     model = GraphAutoencoder(enc, dec).to(device)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    scaler = torch.cuda.amp.GradScaler()
+    use_amp = torch.cuda.is_available() and str(device).startswith("cuda")
+    scaler = torch.amp.GradScaler("cuda") if use_amp else None
     
     epochs = 5
     epoch_results = []
@@ -137,14 +142,18 @@ def main():
         n_batches = 0
         for i, data in enumerate(train_ds):
             data.edge_index = build_knn_graph_gpu(data.x, data.batch, k=8)
-            
+
             optimizer.zero_grad()
-            with torch.cuda.amp.autocast():
+            if use_amp:
+                with torch.amp.autocast("cuda"):
+                    loss = model(data)['loss']
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
                 loss = model(data)['loss']
-                
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+                loss.backward()
+                optimizer.step()
             
             running_loss += loss.item()
             n_batches += 1

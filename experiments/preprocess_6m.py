@@ -9,8 +9,9 @@ from tqdm import tqdm
 PARTICLE_FEATURES = [
     "part_px", "part_py", "part_pz", "part_energy",
     "part_deta", "part_dphi", "part_d0val", "part_d0err",
-    "part_dzval", "part_dzerr", "part_charge", "part_isElectron",
-    "part_isMuon", "part_isPhoton", "part_isChargedHadron", "part_isNeutralHadron"
+    "part_dzval", "part_dzerr", "part_charge",
+    "part_isChargedHadron", "part_isNeutralHadron", "part_isPhoton",
+    "part_isElectron", "part_isMuon"
 ]
 
 LABEL_BRANCHES = [

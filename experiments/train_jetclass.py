@@ -1,11 +1,11 @@
 """
 Train Graph Autoencoder on JetClass particle clouds.
 
-Strategy:
-    - Background: QCD jets (Standard Model, label=0)
-    - Signal: Higgs/W/Z/Top jets (BSM-like, label=1)
+Strategy (QCD-vs-non-QCD ranking benchmark, not BSM discovery):
+    - Background proxy: QCD jets (Standard Model, label=0)
+    - Non-QCD proxy: Higgs/W/Z/Top jets (other known SM classes, label=1)
     - Train autoencoder on QCD background only
-    - Evaluate anomaly detection on mixed QCD + signal test set
+    - Evaluate anomaly-ranking on mixed QCD + non-QCD test set
 
 Usage:
     python experiments/train_jetclass.py --epochs 50 --sample 5000
@@ -14,7 +14,10 @@ Usage:
 
 import argparse
 import logging
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import torch
 import numpy as np
@@ -53,7 +56,13 @@ def main():
         # Large-scale iterable dataset
         bg_files = sorted(Path("data/jetclass").glob("ZJetsToNuNu_*.root"))
         sig_files = sorted(Path("data/jetclass").glob("HTo*.root"))
-        
+
+        if not bg_files:
+            raise FileNotFoundError(
+                "Large mode requires data/jetclass/ZJetsToNuNu_*.root. "
+                "Download JetClass data first (see README / scripts/)."
+            )
+
         logger.info(f"Large-scale mode: Found {len(bg_files)} background files and {len(sig_files)} signal files.")
         
         # In large mode, we don't have validation splits out-of-the-box in the iterable dataset.
@@ -200,7 +209,11 @@ def main():
     # If the AUROC is < 0.5, it means the model is separating them but the scoring convention is flipped.
     # We will flip the scores for the plots.
     from sklearn.metrics import roc_auc_score
-    temp_auroc = roc_auc_score(labels, scores)
+    if len(np.unique(labels)) < 2:
+        logger.warning("Single-class test set; skipping AUROC flip logic.")
+        temp_auroc = 0.5
+    else:
+        temp_auroc = roc_auc_score(labels, scores)
     if temp_auroc < 0.5:
         logger.info(f"Flipping scores (Original AUROC {temp_auroc:.4f} < 0.5)")
         scores = -scores

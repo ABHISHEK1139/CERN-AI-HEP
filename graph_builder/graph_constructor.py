@@ -50,6 +50,11 @@ class EventGraphConstructor:
         self.delta_r_threshold = delta_r_threshold
         self.include_edge_features = include_edge_features
         self.config = config or EventConfig()
+        # NOTE: FeatureExtractor.fit()/transform() standardization exists but is
+        # intentionally NOT applied in the default pipeline (checkpoints were
+        # trained on raw log-pT features). Call fit() on training features and
+        # transform() before collation if you want the standardized variant,
+        # but retrain — do not mix standardized inputs with existing weights.
         self.feature_extractor = FeatureExtractor()
 
     def event_to_graph(
@@ -210,6 +215,8 @@ class EventGraphConstructor:
             if (i + 1) % 1000 == 0:
                 logger.info(f"Converted {i + 1}/{len(events)} events to graphs")
 
+        if not graphs and events:
+            logger.warning("All events skipped (e.g. <2 particles each); no graphs built.")
         logger.info(
             f"Converted {len(graphs)} events to graphs "
             f"(skipped {n_skipped})"
@@ -270,6 +277,10 @@ def main():
     # Save
     output_path = Path(args.output)
     output_path.mkdir(parents=True, exist_ok=True)
+
+    if not graphs:
+        print("No graphs built (all events skipped). Nothing to save.")
+        return
 
     torch.save(graphs, output_path / "graphs.pt")
     torch.save(labels, output_path / "labels.pt")

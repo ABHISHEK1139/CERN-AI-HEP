@@ -63,7 +63,11 @@ class Evaluator:
             probs = torch.softmax(logits, dim=-1)
 
             all_preds.extend(logits.argmax(dim=-1).cpu().numpy())
-            all_probs.extend(probs[:, 1].cpu().numpy())  # anomaly probability
+            # Binary case: anomaly probability; multi-class: max prob
+            if probs.shape[1] > 1:
+                all_probs.extend(probs[:, 1].cpu().numpy())  # anomaly probability
+            else:
+                all_probs.extend(probs[:, 0].cpu().numpy())
             all_labels.extend(data.y.cpu().numpy().flatten())
 
         preds = np.array(all_preds)
@@ -267,11 +271,28 @@ class Evaluator:
             data = data.to(self.device)
 
             if hasattr(model, "encoder"):
-                z = model.encoder(data.x, data.edge_index, data.batch)
+                batch = getattr(data, "batch", None)
+                if batch is None:
+                    batch = torch.zeros(
+                        data.x.size(0), dtype=torch.long, device=data.x.device
+                    )
+                z = model.encoder(data.x, data.edge_index, batch)
             else:
-                z = model(data.x, data.edge_index, data.batch)
+                # Generic model (e.g. PhysicsNeMo wrapper expects a Data object)
+                try:
+                    z = model(data.x, data.edge_index, data.batch)
+                except Exception:
+                    # Fall back: wrapper-style forward on Data, then pool
+                    graph_emb = model(data)
+                    all_embeddings.append(graph_emb.cpu().numpy())
+                    if data.y is not None:
+                        all_labels.extend(data.y.cpu().numpy().flatten())
+                    continue
 
-            graph_emb = global_mean_pool(z, data.batch)
+            batch = getattr(data, "batch", None)
+            if batch is None:
+                batch = torch.zeros(z.size(0), dtype=torch.long, device=z.device)
+            graph_emb = global_mean_pool(z, batch)
             all_embeddings.append(graph_emb.cpu().numpy())
 
             if data.y is not None:

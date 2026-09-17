@@ -133,8 +133,10 @@ class PhysicsNeMoWrapper(nn.Module):
         """Encode graph to a single vector."""
         x = data.x
         edge_index = data.edge_index
-        edge_attr = data.edge_attr
-        batch = data.batch
+        edge_attr = getattr(data, "edge_attr", None)
+        batch = getattr(data, "batch", None)
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
 
         if self._physicsnemo_available:
             # PhysicsNeMo path

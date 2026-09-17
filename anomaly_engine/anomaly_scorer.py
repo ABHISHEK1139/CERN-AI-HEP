@@ -68,10 +68,19 @@ class AnomalyScorer:
                 all_labels.extend(labels)
 
             if hasattr(data, "event_id"):
-                if isinstance(data.event_id, (list, tuple)):
-                    all_event_ids.extend(data.event_id)
+                eid = data.event_id
+                # PyG Batch collates ints into a tensor [B]; expand per-graph.
+                if isinstance(eid, torch.Tensor):
+                    all_event_ids.extend(eid.cpu().flatten().tolist())
+                elif isinstance(eid, (list, tuple)):
+                    all_event_ids.extend(list(eid))
+                elif isinstance(eid, np.ndarray):
+                    all_event_ids.extend(eid.flatten().tolist())
                 else:
-                    all_event_ids.append(data.event_id)
+                    try:
+                        all_event_ids.append(int(eid))
+                    except Exception:
+                        all_event_ids.append(eid)
 
         scores = np.array(all_scores)
         labels = np.array(all_labels) if all_labels else np.array([])
@@ -101,9 +110,14 @@ class AnomalyScorer:
 
         results = []
         for rank, idx in enumerate(sorted_idx[:top_k]):
+            eid = event_ids[idx]
+            try:
+                eid = int(eid)
+            except Exception:
+                pass
             results.append({
                 "rank": rank + 1,
-                "event_id": int(event_ids[idx]),
+                "event_id": eid,
                 "anomaly_score": float(scores[idx]),
             })
 

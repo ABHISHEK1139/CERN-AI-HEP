@@ -54,6 +54,7 @@ def prepare_data(config, data_dir=None):
         constructor = EventGraphConstructor(
             strategy=config["data"]["graphs"]["strategy"],
             k=config["data"]["graphs"]["k"],
+            delta_r_threshold=config["data"]["graphs"].get("delta_r", 1.5),
         )
         graphs = constructor.convert_dataset(events, labels)
 
@@ -61,8 +62,13 @@ def prepare_data(config, data_dir=None):
         torch.save(graphs, graphs_file)
 
     dataset = CollisionEventDataset(root=str(graph_dir), graphs=graphs)
+    split_cfg = config.get("splits", {})
     train_loader, val_loader, test_loader = dataset.get_loaders(
         batch_size=config["training"]["batch_size"],
+        train_ratio=split_cfg.get("train", 0.7),
+        val_ratio=split_cfg.get("val", 0.15),
+        test_ratio=split_cfg.get("test", 0.15),
+        seed=split_cfg.get("seed", 42),
     )
 
     return train_loader, val_loader, test_loader, dataset

@@ -7,6 +7,7 @@ Provides a unified interface to instantiate any model by name.
 from anomaly_engine.models.gcn import GCNClassifier, GCNEncoder
 from anomaly_engine.models.graphsage import GraphSAGEClassifier, GraphSAGEEncoder
 from anomaly_engine.models.gat import GATClassifier, GATEncoder
+from anomaly_engine.models.edge_conv import EdgeConvEncoder
 from anomaly_engine.models.baselines import MLPClassifier, CNNClassifier
 from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
 
@@ -24,6 +25,7 @@ ENCODERS = {
     "gcn": GCNEncoder,
     "graphsage": GraphSAGEEncoder,
     "gat": GATEncoder,
+    "edgeconv": EdgeConvEncoder,
 }
 
 
@@ -56,6 +58,7 @@ __all__ = [
     "GCNClassifier", "GCNEncoder",
     "GraphSAGEClassifier", "GraphSAGEEncoder",
     "GATClassifier", "GATEncoder",
+    "EdgeConvEncoder",
     "MLPClassifier", "CNNClassifier",
     "GraphAutoencoder", "GraphDecoder",
     "get_classifier", "get_encoder", "get_autoencoder",

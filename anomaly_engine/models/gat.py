@@ -60,6 +60,8 @@ class GATEncoder(nn.Module):
         return x
 
     def encode_graph(self, x, edge_index, batch):
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
         node_emb = self.forward(x, edge_index, batch)
         return global_mean_pool(node_emb, batch) + global_max_pool(node_emb, batch)
 

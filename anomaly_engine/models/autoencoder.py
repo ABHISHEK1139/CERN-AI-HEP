@@ -142,10 +142,20 @@ class GraphAutoencoder(nn.Module):
             Latent vectors [B, latent_dim].
         """
         with torch.no_grad():
-            z = self.encoder(data.x, data.edge_index, data.batch)
-            return global_mean_pool(z, data.batch)
+            batch = getattr(data, "batch", None)
+            if batch is None:
+                batch = torch.zeros(
+                    data.x.size(0), dtype=torch.long, device=data.x.device
+                )
+            z = self.encoder(data.x, data.edge_index, batch)
+            return global_mean_pool(z, batch)
 
     def encode_nodes(self, data) -> torch.Tensor:
         """Get per-node latent representations."""
         with torch.no_grad():
-            return self.encoder(data.x, data.edge_index, data.batch)
+            batch = getattr(data, "batch", None)
+            if batch is None:
+                batch = torch.zeros(
+                    data.x.size(0), dtype=torch.long, device=data.x.device
+                )
+            return self.encoder(data.x, data.edge_index, batch)

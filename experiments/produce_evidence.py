@@ -120,7 +120,7 @@ def generate_evidence():
 
     # 3. Plot ROC Curve
     plt.figure(figsize=(8, 6))
-    plt.plot(fpr, tpr, color='darkorange', lw=2, label='EdgeConv (AUC = 0.6808)')
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'EdgeConv (AUC = {roc_auc:.4f})')
     plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')

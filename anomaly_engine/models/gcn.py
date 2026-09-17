@@ -79,6 +79,8 @@ class GCNEncoder(nn.Module):
         Returns:
             Graph embedding [B, latent_dim].
         """
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
         node_emb = self.forward(x, edge_index, batch)
         # Combine mean and max pooling
         graph_emb = global_mean_pool(node_emb, batch) + global_max_pool(node_emb, batch)

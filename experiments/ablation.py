@@ -64,7 +64,9 @@ def train_and_eval(model, train_loader, val_loader, device):
             
     scores = np.array(all_scores)
     labels = np.array(all_labels)
-    
+
+    if len(np.unique(labels)) < 2:
+        return 0.5
     temp_auroc = roc_auc_score(labels, scores)
     if temp_auroc < 0.5:
         scores = -scores

@@ -63,10 +63,10 @@ class FeatureExtractor:
         if 0 <= node_type < NUM_PARTICLE_TYPES:
             type_onehot[node_type] = 1.0
 
-        # Physics features
+        # Physics features (guard log1p domain: negative pt/energy/mass -> NaN)
         pt = particle["pt"]
         if self.log_pt:
-            pt = np.log1p(pt)  # log(1 + pT) for numerical stability
+            pt = np.log1p(max(pt, 0.0))  # log(1 + pT) for numerical stability
 
         eta = particle.get("eta", 0.0)
         phi = particle.get("phi", 0.0)
@@ -75,11 +75,15 @@ class FeatureExtractor:
         energy = particle.get("energy", particle["pt"])
 
         if self.log_pt:
-            energy = np.log1p(energy)
-            mass = np.log1p(mass)
+            energy = np.log1p(max(energy, 0.0))
+            mass = np.log1p(max(mass, 0.0))
 
+        # Final sanitize: no NaN/inf may reach the model
         physics_features = np.array(
             [pt, eta, phi, mass, charge, energy], dtype=np.float32
+        )
+        physics_features = np.nan_to_num(
+            physics_features, nan=0.0, posinf=0.0, neginf=0.0
         )
 
         return np.concatenate([type_onehot, physics_features])
@@ -122,12 +126,12 @@ class FeatureExtractor:
     @staticmethod
     def _delta_phi(phi1: float, phi2: float) -> float:
         """Compute Δφ wrapped to [-π, π]."""
+        if not np.isfinite(phi1) or not np.isfinite(phi2):
+            return 0.0
         dphi = phi1 - phi2
-        while dphi > np.pi:
-            dphi -= 2 * np.pi
-        while dphi < -np.pi:
-            dphi += 2 * np.pi
-        return dphi
+        # mod-based wrap (while-loop hangs on inf: inf - 2π == inf)
+        dphi = (dphi + np.pi) % (2 * np.pi) - np.pi
+        return float(dphi)
 
     def extract_event_features(
         self, particles: List[Dict[str, Any]]
@@ -141,6 +145,8 @@ class FeatureExtractor:
         Returns:
             Node feature matrix of shape (n_particles, feature_dim).
         """
+        if not particles:
+            return np.zeros((0, NUM_PARTICLE_TYPES + 6), dtype=np.float32)
         features = [self.particle_to_node_features(p) for p in particles]
         return np.stack(features, axis=0)
 

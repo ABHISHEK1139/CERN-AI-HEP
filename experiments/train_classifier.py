@@ -58,6 +58,7 @@ def prepare_data(config: dict, data_dir: str = None):
         constructor = EventGraphConstructor(
             strategy=graph_config["strategy"],
             k=graph_config["k"],
+            delta_r_threshold=graph_config.get("delta_r", 1.5),
         )
         graphs = constructor.convert_dataset(events, labels)
 

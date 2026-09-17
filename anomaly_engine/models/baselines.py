@@ -52,7 +52,9 @@ class MLPClassifier(nn.Module):
     def forward(self, data):
         """Forward pass: pool then classify."""
         x = data.x
-        batch = data.batch
+        batch = getattr(data, "batch", None)
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
 
         # Aggregate node features (ignore edges entirely)
         pooled = torch.cat([
@@ -115,10 +117,12 @@ class CNNClassifier(nn.Module):
     def forward(self, data):
         """Forward pass: pad to fixed length, conv, classify."""
         x = data.x  # [total_nodes, input_dim]
-        batch = data.batch
+        batch = getattr(data, "batch", None)
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
 
         # Reconstruct per-graph tensors with padding
-        batch_size = batch.max().item() + 1
+        batch_size = int(batch.max().item()) + 1
         padded = torch.zeros(
             batch_size, self.max_particles, self.input_dim,
             device=x.device, dtype=x.dtype
@@ -128,9 +132,10 @@ class CNNClassifier(nn.Module):
             mask = batch == b
             nodes = x[mask]
             n = min(nodes.shape[0], self.max_particles)
-            # Sort by pT (feature index 5 = first physics feature after one-hot)
+            # Sort by pT. Synthetic 11-dim layout is [5 one-hot + pt, ...]
+            # so pT lives at index 5; for other feature dims fall back to col 0.
             if n > 0:
-                pt_idx = 5  # pT is at index NUM_PARTICLE_TYPES (5)
+                pt_idx = 5 if nodes.shape[1] > 5 else 0
                 sorted_idx = nodes[:, pt_idx].argsort(descending=True)
                 nodes = nodes[sorted_idx]
                 padded[b, :n] = nodes[:n]

@@ -33,7 +33,7 @@ train-classifier:
 	python experiments/train_classifier.py --model gcn --data data/graphs/ --epochs 100
 
 train-autoencoder:
-	python experiments/train_autoencoder.py --encoder gcn --data data/graphs/ --epochs 100
+	python experiments/train_autoencoder.py --epochs 100 --batch-size 256
 
 benchmark:
 	python experiments/run_benchmark.py --data data/graphs/

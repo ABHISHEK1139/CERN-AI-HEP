@@ -13,8 +13,9 @@ logger = logging.getLogger(__name__)
 PARTICLE_FEATURES = [
     "part_px", "part_py", "part_pz", "part_energy",
     "part_deta", "part_dphi", "part_d0val", "part_d0err",
-    "part_dzval", "part_dzerr", "part_charge", "part_isElectron",
-    "part_isMuon", "part_isPhoton", "part_isChargedHadron", "part_isNeutralHadron"
+    "part_dzval", "part_dzerr", "part_charge",
+    "part_isChargedHadron", "part_isNeutralHadron", "part_isPhoton",
+    "part_isElectron", "part_isMuon",
 ]
 
 LABEL_BRANCHES = [
@@ -53,15 +54,18 @@ class JetClassIterableDataset(IterableDataset):
 
     @staticmethod
     def _build_knn_graph(pos: torch.Tensor, k: int) -> torch.Tensor:
-        # L2 distances
+        n = pos.size(0)
+        k = min(k, n - 1)
+        if k <= 0:
+            return torch.empty((2, 0), dtype=torch.long)
+        # L2 distances (CPU; per-jet graphs are tiny, GPU transfer is slower)
         dist = torch.cdist(pos, pos, p=2)
         dist.fill_diagonal_(float('inf'))
         _, indices = dist.topk(k, largest=False, dim=-1)
-        
-        n = pos.size(0)
+
         source = torch.arange(n).unsqueeze(1).expand(-1, k).reshape(-1)
         target = indices.reshape(-1)
-        
+
         edge_index = torch.stack([source, target], dim=0)
         return edge_index
 
@@ -91,34 +95,42 @@ class JetClassIterableDataset(IterableDataset):
                     # Iterate in chunks to save RAM
                     for arrays in tree.iterate(PARTICLE_FEATURES + LABEL_BRANCHES, step_size=self.chunk_size):
                         n_jets = len(arrays)
-                        print(f"      [Iterable] Read chunk of {n_jets} jets from disk. Padding arrays...")
+                        logger.debug(f"[Iterable] Read chunk of {n_jets} jets from {fpath}.")
                         lengths = ak.to_numpy(ak.num(arrays["part_px"]))
-                        
+
                         padded_feats = []
                         for feat in PARTICLE_FEATURES:
                             padded = ak.fill_none(ak.pad_none(arrays[feat], self.max_particles, clip=True), 0.0)
                             padded_feats.append(ak.to_numpy(padded).astype(np.float32))
-                            
-                        print(f"      [Iterable] Padded. Stacking {len(PARTICLE_FEATURES)} features...")
+
+                        logger.debug(f"[Iterable] Stacking {len(PARTICLE_FEATURES)} features...")
                         # Stack all features into a single dense block [n_jets, max_particles, 16]
                         node_feats_all = np.stack(padded_feats, axis=-1)
-                        print(f"      [Iterable] Stacked into {node_feats_all.shape}. Yielding...")
+                        logger.debug(f"[Iterable] Stacked into {node_feats_all.shape}. Yielding...")
                         
                         is_qcd = ak.to_numpy(arrays["label_QCD"]).astype(bool)
                         binary_labels = (~is_qcd).astype(np.int64)
 
                         for i in range(n_jets):
-                            length = min(lengths[i], self.max_particles)
+                            length = min(int(lengths[i]), self.max_particles)
                             if length < 2:
                                 continue
-                                
+
                             # Zero-copy slicing of the dense numpy block
-                            x = torch.from_numpy(node_feats_all[i, :length, :])
+                            feats = node_feats_all[i, :length, :]
+                            # Sanitize non-finite values (NaN/inf poison MSE loss)
+                            feats = np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
+                            x = torch.from_numpy(feats)
                             y = torch.tensor([binary_labels[i]], dtype=torch.long)
-                            
-                            # We omit edge_index here! We will build it natively on the GPU!
-                            yield Data(x=x, y=y)
-                            
+
+                            # Build k-NN edges on CPU in (deta, dphi) cols 4:6 so that
+                            # downstream GNNs work without a separate GPU build step.
+                            # (Large GPU trainers may overwrite edge_index; harmless.)
+                            edge_index = self._build_knn_graph(
+                                x[:, 4:6].contiguous(), self.k_neighbors
+                            )
+                            yield Data(x=x, edge_index=edge_index, y=y)
+
             except Exception as e:
                 logger.error(f"Error reading {fpath}: {e}")
                 continue

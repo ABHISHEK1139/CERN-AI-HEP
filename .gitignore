@@ -38,19 +38,31 @@ graphs/
 Thumbs.db
 desktop.ini
 
-# Temporary scripts
-rebuild_loss_curve.py
+# Temporary scripts (kept: rebuild_loss_curve.py is now robust with fallbacks)
 
 # Logs
 *.log
 
+# Generated outputs (do not commit)
+reports/
+results/
+mlruns/
+outputs/
+models/
+
 # Project clutter and temp files
 val_5M/
-scratch/
 error
 local_error
 final_report_raw.pdf
 final_report_compressed.pdf
+
+# Scratch: ignore generated artifacts but TRACK regression tests
+scratch/__pycache__/
+scratch/*.png
+scratch/*.pt
+!scratch/test_*.py
+!scratch/generate_readme_images.py
 
 # Jupyter
 .ipynb_checkpoints/

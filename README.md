@@ -62,12 +62,14 @@ graph TD
 - 6 Million Jets
 
 **Background:**
-- 1M Z -> nu nu jets
+- 1M Z -> nu nu jets (QCD-like background proxy)
 
-**Signal:**
-- 5M Higgs / Top / W / Z decays
+**Signal (for ranking benchmark only, not BSM):**
+- 5M Higgs / Top / W / Z decays (known SM classes used as non-QCD proxy)
 
-Used for large-scale anomaly detection experiments.
+Used for large-scale QCD-vs-non-QCD anomaly-ranking benchmark experiments.
+This is not a BSM discovery claim: non-QCD here means other known SM jet
+classes, not new physics.
 
 ---
 
@@ -117,25 +119,32 @@ The remaining 45 epochs produced only a modest improvement of 0.018 AUROC, indic
 
 ## NVIDIA PhysicsNeMo Integration
 
-A hybrid PyTorch Geometric + PhysicsNeMo implementation was benchmarked.
+A hybrid PyTorch Geometric + PhysicsNeMo-inspired implementation was benchmarked.
+If `nvidia-physicsnemo` is not installed, `physicsnemo_integration/wrapper.py`
+falls back to a pure-PyG MeshGraphNet-style network, so a clean install
+benchmarks the fallback, not NVIDIA code.
 
 | Pipeline | Latency |
 |------------|-----------|
 | PyG | 2.79 ms |
-| PhysicsNeMo Hybrid | 1.73 ms |
+| PhysicsNeMo-inspired fallback | 1.73 ms |
 
-**Speedup:** 1.62x
+**Speedup:** 1.62x (micro-benchmark; not a physics result)
 
 ---
 
 ## CMS Open Data Validation
 
-The complete pipeline was validated on real CMS NanoAOD detector events.
+A narrow prototype was validated on real CMS NanoAOD detector events:
+`graph_builder/cms_dataset.py` reads `Jet_pt/eta/phi/mass` and builds a
+2-node graph from the leading two jets only (4 features per node). It covers
+ROOT loading, jet extraction, graph construction, and inference, but it does
+not reproduce the full JetClass particle-cloud pipeline on CMS data.
 
 **Capabilities:**
 - ROOT loading
-- Particle extraction
-- Graph construction
+- Jet extraction (leading 2 jets)
+- Graph construction (2-node)
 - Inference
 
 This demonstrates applicability beyond synthetic benchmarks.

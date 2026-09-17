@@ -51,7 +51,7 @@ class CollisionEventDataset(InMemoryDataset):
             self.data, self.slices = self.collate(graphs)
             # Save for future use
             Path(self.processed_dir).mkdir(parents=True, exist_ok=True)
-            torch.save((self.data, self.slices), self.processed_paths[0])
+            torch.save((self._data, self.slices), self.processed_paths[0])
         else:
             # Try loading from graphs.pt
             graphs_path = Path(root) / "graphs.pt"
@@ -59,7 +59,7 @@ class CollisionEventDataset(InMemoryDataset):
                 graphs = torch.load(graphs_path, weights_only=False)
                 self.data, self.slices = self.collate(graphs)
                 Path(self.processed_dir).mkdir(parents=True, exist_ok=True)
-                torch.save((self.data, self.slices), self.processed_paths[0])
+                torch.save((self._data, self.slices), self.processed_paths[0])
             else:
                 raise FileNotFoundError(
                     f"No graphs found. Run graph_constructor first, or provide graphs list."
@@ -117,10 +117,16 @@ class CollisionEventDataset(InMemoryDataset):
         """Select subset by indices, returning a new dataset."""
         graphs = [self.get(i) for i in indices]
         subset = CollisionEventDataset.__new__(CollisionEventDataset)
+        # Preserve InMemoryDataset internals so collate()/get() keep working.
         subset.transform = self.transform
         subset.pre_transform = self.pre_transform
         subset._indices = None
-        subset.data, subset.slices = self.collate(graphs)
+        # InMemoryDataset.collate is an instance method in older PyG but a
+        # staticmethod in newer releases; support both.
+        try:
+            subset.data, subset.slices = self.collate(graphs)
+        except TypeError:
+            subset.data, subset.slices = CollisionEventDataset.collate(graphs)
         subset._data_list = None
         return subset
 
