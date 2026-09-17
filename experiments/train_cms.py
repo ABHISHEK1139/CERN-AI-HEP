@@ -52,13 +52,14 @@ def main():
         batch_size=args.batch_size, train_ratio=0.8, val_ratio=0.1, test_ratio=0.1
     )
     
-    # Combine background test and signal test
+    # Combine the held-out background test split with the signal set.
+    # (Reuses bg_test_loader's disjoint split instead of re-splitting.)
     logger.info("Constructing mixed test set...")
-    # The get_splits method already returned loaders, but we can just use the datasets directly to merge
-    bg_train_ds, bg_val_ds, bg_test_ds = bg_dataset.get_splits(0.8, 0.1, 0.1)
-    
-    # Concat datasets
-    mixed_test_dataset = torch.utils.data.ConcatDataset([bg_test_ds, sig_dataset])
+
+    # Concat datasets (held-out background test split + full signal set)
+    mixed_test_dataset = torch.utils.data.ConcatDataset(
+        [bg_test_loader.dataset, sig_dataset]
+    )
     test_loader = torch_geometric.loader.DataLoader(
         mixed_test_dataset, batch_size=args.batch_size, shuffle=False
     )

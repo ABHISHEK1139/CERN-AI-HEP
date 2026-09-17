@@ -47,7 +47,7 @@ class Evaluator:
         """
         from sklearn.metrics import (
             accuracy_score, precision_score, recall_score, f1_score,
-            roc_auc_score, confusion_matrix, classification_report,
+            roc_auc_score, confusion_matrix,
         )
 
         model = model.to(self.device)
@@ -59,30 +59,45 @@ class Evaluator:
 
         for data in loader:
             data = data.to(self.device)
-            logits = model(data)
-            probs = torch.softmax(logits, dim=-1)
+            out = model(data)
+            if isinstance(out, dict):
+                raise TypeError(
+                    "evaluate_classifier needs a classifier returning logits, "
+                    "but got a dict (e.g. autoencoder). Use evaluate_autoencoder()."
+                )
+            logits = out
+            if logits.dim() == 1:
+                logits = logits.unsqueeze(-1)
 
-            all_preds.extend(logits.argmax(dim=-1).cpu().numpy())
-            # Binary case: anomaly probability; multi-class: max prob
-            if probs.shape[1] > 1:
+            if logits.shape[1] > 1:
+                probs = torch.softmax(logits, dim=-1)
                 all_probs.extend(probs[:, 1].cpu().numpy())  # anomaly probability
+                all_preds.extend(logits.argmax(dim=-1).cpu().numpy())
             else:
-                all_probs.extend(probs[:, 0].cpu().numpy())
+                # Single-logit binary head: sigmoid probability, 0.5 threshold.
+                p = torch.sigmoid(logits[:, 0])
+                all_probs.extend(p.cpu().numpy())
+                all_preds.extend((logits[:, 0] > 0).long().cpu().numpy())
             all_labels.extend(data.y.cpu().numpy().flatten())
 
         preds = np.array(all_preds)
         probs = np.array(all_probs)
         labels = np.array(all_labels)
 
+        if len(labels) == 0:
+            raise ValueError("evaluate_classifier received an empty DataLoader.")
+
+        n_classes = len(np.unique(labels))
+        average = "binary" if n_classes == 2 else "macro"
         results = {
             "accuracy": float(accuracy_score(labels, preds)),
-            "precision": float(precision_score(labels, preds, zero_division=0)),
-            "recall": float(recall_score(labels, preds, zero_division=0)),
-            "f1": float(f1_score(labels, preds, zero_division=0)),
+            "precision": float(precision_score(labels, preds, average=average, zero_division=0)),
+            "recall": float(recall_score(labels, preds, average=average, zero_division=0)),
+            "f1": float(f1_score(labels, preds, average=average, zero_division=0)),
             "confusion_matrix": confusion_matrix(labels, preds).tolist(),
         }
 
-        if len(np.unique(labels)) > 1:
+        if n_classes == 2:
             results["auroc"] = float(roc_auc_score(labels, probs))
 
         return results
@@ -114,6 +129,11 @@ class Evaluator:
         for data in loader:
             data = data.to(self.device)
             result = model(data)
+            if not isinstance(result, dict) or "per_graph_loss" not in result:
+                raise TypeError(
+                    "evaluate_autoencoder needs an autoencoder returning "
+                    "dict(per_graph_loss=...). Use evaluate_classifier() for classifiers."
+                )
             scores = result["per_graph_loss"].cpu().numpy()
             all_scores.extend(scores)
 
@@ -122,6 +142,9 @@ class Evaluator:
 
         scores = np.array(all_scores)
         labels = np.array(all_labels)
+
+        if len(scores) == 0:
+            raise ValueError("evaluate_autoencoder received an empty DataLoader.")
 
         results = {
             "mean_recon_error": float(np.mean(scores)),
@@ -156,12 +179,18 @@ class Evaluator:
         """Plot training and validation loss curves."""
         import matplotlib.pyplot as plt
 
+        train_loss = history.get("train_loss", [])
+        val_loss = history.get("val_loss", [])
+        lrs = history.get("lr", [])
+        if not train_loss or not val_loss:
+            raise ValueError("plot_training_curves needs history with train_loss/val_loss.")
+
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
         # Loss curves
         ax = axes[0]
-        ax.plot(history["train_loss"], label="Train Loss", color="#3498db", linewidth=2)
-        ax.plot(history["val_loss"], label="Val Loss", color="#e74c3c", linewidth=2)
+        ax.plot(train_loss, label="Train Loss", color="#3498db", linewidth=2)
+        ax.plot(val_loss, label="Val Loss", color="#e74c3c", linewidth=2)
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Loss")
         ax.set_title(f"{title} — Loss")
@@ -170,7 +199,7 @@ class Evaluator:
 
         # Learning rate
         ax = axes[1]
-        ax.plot(history["lr"], color="#2ecc71", linewidth=2)
+        ax.plot(lrs if lrs else [1.0] * len(train_loss), color="#2ecc71", linewidth=2)
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Learning Rate")
         ax.set_title("Learning Rate Schedule")
@@ -270,6 +299,8 @@ class Evaluator:
         for data in loader:
             data = data.to(self.device)
 
+            if getattr(data, "x", None) is None:
+                raise ValueError("plot_latent_space needs data.x node features.")
             if hasattr(model, "encoder"):
                 batch = getattr(data, "batch", None)
                 if batch is None:
@@ -298,20 +329,27 @@ class Evaluator:
             if data.y is not None:
                 all_labels.extend(data.y.cpu().numpy().flatten())
 
+        if not all_embeddings:
+            raise ValueError("plot_latent_space received an empty DataLoader.")
         embeddings = np.concatenate(all_embeddings, axis=0)
         labels = np.array(all_labels)
+
+        if len(embeddings) < 2:
+            raise ValueError("plot_latent_space needs at least 2 graphs.")
 
         # Dimensionality reduction
         if method == "tsne":
             from sklearn.manifold import TSNE
-            reducer = TSNE(n_components=2, random_state=42, perplexity=30)
+            perplexity = max(1, min(30, len(embeddings) - 1))
+            reducer = TSNE(n_components=2, random_state=42, perplexity=perplexity)
         else:
             try:
                 from umap import UMAP
                 reducer = UMAP(n_components=2, random_state=42)
             except ImportError:
                 from sklearn.manifold import TSNE
-                reducer = TSNE(n_components=2, random_state=42)
+                perplexity = max(1, min(30, len(embeddings) - 1))
+                reducer = TSNE(n_components=2, random_state=42, perplexity=perplexity)
                 method = "tsne"
 
         coords = reducer.fit_transform(embeddings)
@@ -353,9 +391,13 @@ class Evaluator:
         """
         import matplotlib.pyplot as plt
 
+        if not results:
+            raise ValueError("plot_comparison_table received empty results.")
         models = list(results.keys())
         metrics = ["auroc", "accuracy", "f1", "precision", "recall"]
         available_metrics = [m for m in metrics if m in results[models[0]]]
+        if not available_metrics:
+            raise ValueError("plot_comparison_table found no plottable metrics.")
 
         fig, ax = plt.subplots(figsize=(12, 6))
 

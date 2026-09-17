@@ -41,7 +41,7 @@ class GCNEncoder(nn.Module):
         self.norms.append(nn.BatchNorm1d(hidden_dim))
 
         # Hidden layers
-        for _ in range(num_layers - 2):
+        for _ in range(max(num_layers - 2, 0)):
             self.convs.append(GCNConv(hidden_dim, hidden_dim))
             self.norms.append(nn.BatchNorm1d(hidden_dim))
 
@@ -65,7 +65,8 @@ class GCNEncoder(nn.Module):
         """
         for i, (conv, norm) in enumerate(zip(self.convs, self.norms)):
             x = conv(x, edge_index)
-            x = norm(x)
+            # BatchNorm needs >1 sample in train mode; skip it for degenerate batches.
+            x = norm(x) if x.size(0) > 1 else x
             if i < len(self.convs) - 1:
                 x = F.relu(x)
                 x = F.dropout(x, p=self.dropout, training=self.training)

@@ -10,6 +10,8 @@ setup(
     author_email="ak612520208365@gmail.com",
     packages=find_packages(),
     python_requires=">=3.10",
+    # Runtime deps only (mirrors requirements.txt minus notebook/docs tooling:
+    # jupyterlab, markdown-pdf and PyMuPDF stay in requirements.txt).
     install_requires=[
         "torch>=2.0",
         "torch-geometric>=2.4",

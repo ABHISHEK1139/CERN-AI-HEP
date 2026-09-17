@@ -63,7 +63,11 @@ class FeatureExtractor:
         if 0 <= node_type < NUM_PARTICLE_TYPES:
             type_onehot[node_type] = 1.0
 
-        # Physics features (guard log1p domain: negative pt/energy/mass -> NaN)
+        # Physics features (pt is required; guard log1p domain: negatives -> NaN)
+        if "pt" not in particle:
+            raise KeyError(
+                f"particle_to_node_features requires 'pt', got keys {sorted(particle.keys())}"
+            )
         pt = particle["pt"]
         if self.log_pt:
             pt = np.log1p(max(pt, 0.0))  # log(1 + pT) for numerical stability
@@ -109,15 +113,17 @@ class FeatureExtractor:
         eta_j = node_j.get("eta", 0.0)
         phi_i = node_i.get("phi", 0.0)
         phi_j = node_j.get("phi", 0.0)
-        pt_i = node_i["pt"]
-        pt_j = node_j["pt"]
+        pt_i = node_i.get("pt", None)
+        pt_j = node_j.get("pt", None)
+        if pt_i is None or pt_j is None:
+            raise KeyError("compute_edge_features requires 'pt' in both particles.")
 
         delta_eta = eta_i - eta_j
         delta_phi = self._delta_phi(phi_i, phi_j)
         delta_r = np.sqrt(delta_eta**2 + delta_phi**2)
 
-        # Relative pT: log ratio
-        relative_pt = np.log1p(pt_i) - np.log1p(pt_j)
+        # Relative pT: log ratio (clamped like node features to avoid NaN)
+        relative_pt = np.log1p(max(pt_i, 0.0)) - np.log1p(max(pt_j, 0.0))
 
         return np.array(
             [delta_r, delta_eta, delta_phi, relative_pt], dtype=np.float32
@@ -160,6 +166,8 @@ class FeatureExtractor:
         Returns:
             self
         """
+        if all_features.shape[0] == 0:
+            raise ValueError("fit received 0 samples.")
         if self.standardize:
             self._mean = np.mean(all_features, axis=0)
             self._std = np.std(all_features, axis=0)

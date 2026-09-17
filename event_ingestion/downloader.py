@@ -221,8 +221,12 @@ class CMSDataDownloader:
         # Download up to max_files
         downloaded = []
         for file_info in files[:max_files]:
+            uri = file_info.get("uri", "")
+            if not uri:
+                logger.warning(f"Skipping record entry without URI: {file_info}")
+                continue
             path = self.download_file(
-                file_info["uri"],
+                uri,
                 self.config.raw_dir / dataset_key,
                 max_size_mb=max_size_mb,
             )

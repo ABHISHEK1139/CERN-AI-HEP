@@ -4,6 +4,10 @@ from glob import glob
 from torch_geometric.utils import scatter
 
 
+# NOTE: intentionally mirrors the chunk format consumed by
+# experiments/run_5epochs_edgeconv.py and run_6m_ablation.py
+# ({x: [jets, 128, 16], lengths: [jets], y: [jets]}), not their classes —
+# importing those scripts would couple the test to heavy GPU trainers.
 class FastChunkedDataset:
     def __init__(self, chunk_files, batch_size=2048, device=None):
         self.chunk_files = chunk_files

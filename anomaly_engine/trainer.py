@@ -209,6 +209,17 @@ class Trainer:
 
         return self.history
 
+    @staticmethod
+    def _require_labels(data):
+        """Return flattened long labels or raise a clear error for unlabeled batches."""
+        y = getattr(data, "y", None)
+        if y is None:
+            raise ValueError(
+                "Classification training requires data.y labels, but this batch "
+                "has y=None. Use train_autoencoder() for unsupervised graphs."
+            )
+        return y.view(-1).long()
+
     def _train_epoch_classifier(self, loader, criterion):
         self.model.train()
         total_loss = 0
@@ -220,8 +231,7 @@ class Trainer:
             self.optimizer.zero_grad()
 
             logits = self.model(data)
-            target = data.y.view(-1).long()
-
+            target = self._require_labels(data)
             loss = criterion(logits, target)
 
             loss.backward()
@@ -234,7 +244,7 @@ class Trainer:
             total += data.num_graphs
 
         if total == 0:
-            return 0.0, 0.0
+            raise ValueError("Classifier training received an empty DataLoader.")
         return total_loss / total, correct / total
 
     @torch.no_grad()
@@ -247,7 +257,7 @@ class Trainer:
         for data in loader:
             data = data.to(self.device)
             logits = self.model(data)
-            target = data.y.view(-1).long()
+            target = self._require_labels(data)
             loss = criterion(logits, target)
 
             total_loss += loss.item() * data.num_graphs
@@ -256,7 +266,7 @@ class Trainer:
             total += data.num_graphs
 
         if total == 0:
-            return 0.0, 0.0
+            raise ValueError("Classifier evaluation received an empty DataLoader.")
         return total_loss / total, correct / total
 
     # ----------------------------------------------------------------
@@ -402,7 +412,8 @@ class Trainer:
         if pbar is not None:
             pbar.close()
 
-        if total == 0: return float('inf') # Prevent div by zero on empty epochs
+        if total == 0:
+            raise ValueError("Autoencoder training received an empty DataLoader.")
         return total_loss / total
 
     @torch.no_grad()
@@ -418,7 +429,7 @@ class Trainer:
             total += data.num_graphs
 
         if total == 0:
-            return float("inf")
+            raise ValueError("Autoencoder validation received an empty DataLoader.")
         return total_loss / total
 
     # ----------------------------------------------------------------

@@ -1,5 +1,9 @@
 FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
 
+# NOTE: requirements.txt asks for torch>=2.0, which pip treats as already
+# satisfied by the base image's torch 2.1.0 — it will NOT reinstall/overwrite
+# the CUDA build. Do not add an unpinned `pip install torch` step here.
+
 LABEL maintainer="Abhishek <ak612520208365@gmail.com>"
 LABEL description="Graph Neural Network Anomaly Detection for High Energy Physics Collision Events"
 
@@ -28,6 +32,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 RUN pip install .
+
+# Streamlit demo port (run with: docker run -p 8501:8501 <image> streamlit run demo.py)
+EXPOSE 8501
 
 # Default CMD runs the CPU smoke benchmark (synthetic data, no downloads).
 # The large JetClass run needs data/jetclass/*.root which is excluded from

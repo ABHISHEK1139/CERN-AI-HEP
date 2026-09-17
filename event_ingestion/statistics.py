@@ -49,7 +49,9 @@ class EventStatistics:
         all_mass = []
 
         for event in events:
-            for p in event["particles"]:
+            for p in event.get("particles", []):
+                if "type" not in p or "pt" not in p:
+                    continue
                 type_counts[p["type"]] += 1
                 all_pt.append(p["pt"])
                 all_eta.append(p.get("eta", 0.0))
@@ -62,6 +64,21 @@ class EventStatistics:
         all_phi = np.array(all_phi)
         all_energy = np.array(all_energy)
         all_mass = np.array(all_mass)
+
+        if len(all_pt) == 0:
+            return {
+                "n_events": n_events,
+                "n_particles_total": 0,
+                "particles_per_event": {
+                    "mean": float(np.mean(multiplicities)),
+                    "std": float(np.std(multiplicities)),
+                    "min": int(np.min(multiplicities)),
+                    "max": int(np.max(multiplicities)),
+                    "median": float(np.median(multiplicities)),
+                },
+                "type_counts": {},
+                "type_fractions": {},
+            }
 
         summary = {
             "n_events": n_events,
@@ -172,6 +189,8 @@ class EventStatistics:
         for event in events:
             multiplicities.append(event.get("n_particles", len(event.get("particles", []))))
             for p in event.get("particles", []):
+                if "type" not in p or "pt" not in p:
+                    continue
                 all_pt.append(p["pt"])
                 all_eta.append(p.get("eta", 0.0))
                 all_phi.append(p.get("phi", 0.0))
@@ -180,6 +199,10 @@ class EventStatistics:
         all_pt = np.array(all_pt)
         all_eta = np.array(all_eta)
         all_phi = np.array(all_phi)
+
+        if len(all_pt) == 0:
+            logger.warning("plot_distributions found 0 particles; nothing to plot.")
+            return
 
         fig, axes = plt.subplots(2, 3, figsize=(18, 10))
         fig.suptitle("Collision Event Distributions", fontsize=16, fontweight="bold")

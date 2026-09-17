@@ -74,19 +74,19 @@ def test_event_loader_tree_cycle_and_suffix():
         raise AssertionError("expected FileNotFoundError")
 
 
-def test_statistics_empty_and_deterministic():
+def test_statistics_empty_and_deterministic(tmp_path):
     from event_ingestion.statistics import EventStatistics
 
     stats = EventStatistics()
     assert stats.compute([]) == {"n_events": 0}
-    stats.plot_distributions([], output_dir="reports/test_figs")
+    stats.plot_distributions([], output_dir=str(tmp_path / "figs"))
     # Seeded scatter must not consume global RNG
     np.random.seed(123)
     before = np.random.rand()
     np.random.seed(123)
     stats.plot_distributions(
         [{"n_particles": 1, "particles": [{"type": "Jet", "pt": 50.0}]}],
-        output_dir="reports/test_figs",
+        output_dir=str(tmp_path / "figs"),
     )
     np.random.seed(123)
     assert np.random.rand() == before

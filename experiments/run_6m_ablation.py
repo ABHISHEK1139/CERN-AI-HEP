@@ -82,7 +82,9 @@ def build_knn_graph_gpu(x, batch, k=8):
     B, N_max, _ = dense_pos.shape
     
     dist = torch.cdist(dense_pos, dense_pos)
+    # Mask padded rows (invalid sources) AND padded columns (invalid targets).
     dist.masked_fill_(~mask.unsqueeze(1), float('inf'))
+    dist.masked_fill_(~mask.unsqueeze(2), float('inf'))
     dist.diagonal(dim1=1, dim2=2).fill_(float('inf'))
     
     actual_k = min(k, N_max - 1)
@@ -115,17 +117,18 @@ def get_model(arch, input_dim=16, hidden_dim=64, latent_dim=32):
         dec = GraphDecoder(latent_dim, hidden_dim, input_dim)
         return GraphAutoencoder(enc, dec)
 
-def train_and_eval(model, train_ds, val_loader, device):
+def train_and_eval(model, train_ds, val_loader, device, k=8):
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     use_amp = torch.cuda.is_available() and str(device).startswith("cuda")
     scaler = torch.amp.GradScaler("cuda") if use_amp else None
 
     model.train()
     print("  Training 1 epoch on 6 million...")
+    n_batches = 0
     for i, data in enumerate(train_ds):
         # Build graph natively on GPU
         if not isinstance(model, MLPAutoencoder):
-            data.edge_index = build_knn_graph_gpu(data.x, data.batch, k=8)
+            data.edge_index = build_knn_graph_gpu(data.x, data.batch, k=k)
 
         optimizer.zero_grad()
         if use_amp:
@@ -144,9 +147,14 @@ def train_and_eval(model, train_ds, val_loader, device):
                 loss = model(data)['loss']
             loss.backward()
             optimizer.step()
-        
+        n_batches += 1
+
         if i % 100 == 0:
             print(f"    Batch {i}: Loss {loss.item():.4f}")
+
+    if n_batches == 0:
+        print("  Warning: 0 training batches (no chunks yielded data).")
+        return 0.5
             
     model.eval()
     print("  Evaluating...")
@@ -156,7 +164,7 @@ def train_and_eval(model, train_ds, val_loader, device):
         for data in val_loader:
             data = data.to(device)
             if not isinstance(model, MLPAutoencoder):
-                data.edge_index = build_knn_graph_gpu(data.x, data.batch, k=8)
+                data.edge_index = build_knn_graph_gpu(data.x, data.batch, k=k)
                 
             res = model(data)
             all_scores.extend(res['per_graph_loss'].cpu().numpy())
@@ -168,19 +176,20 @@ def train_and_eval(model, train_ds, val_loader, device):
     from sklearn.metrics import roc_auc_score
     if len(np.unique(labels)) < 2:
         return 0.5
-    temp_auroc = roc_auc_score(labels, scores)
-    if temp_auroc < 0.5:
-        scores = -scores
-        temp_auroc = roc_auc_score(labels, scores)
-        
-    return temp_auroc
+    # Raw AUROC, no post-hoc flip: flipping on test scores inflates the metric.
+    raw_auroc = roc_auc_score(labels, scores)
+    if raw_auroc < 0.5:
+        print(f"  Note: raw AUROC {raw_auroc:.4f} < 0.5 (inverse scoring).")
+    return raw_auroc
 
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
     bg_files = sorted(glob("data/jetclass/ZJetsToNuNu_*.root"))
-    
+    if not bg_files:
+        print("Note: no data/jetclass/ZJetsToNuNu_*.root found; training uses processed chunks.")
+
     # Validation data (use val_5M like before for quick eval)
     val_bg_files = sorted(glob("data/jetclass/val_5M/ZJetsToNuNu_*.root"))[:1]
     val_sig_files = sorted(glob("data/jetclass/val_5M/HTo*.root"))[:1]
@@ -212,7 +221,7 @@ def main():
         train_ds = FastChunkedDataset(chunk_files, batch_size=2048, device=device)
         
         model = get_model(arch).to(device)
-        auroc = train_and_eval(model, train_ds, val_loader, device)
+        auroc = train_and_eval(model, train_ds, val_loader, device, k=k)
         
         results[name] = auroc
         print(f"  {name} AUROC: {auroc:.4f}")

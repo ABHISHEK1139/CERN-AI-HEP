@@ -3,12 +3,15 @@ import os
 
 import pytest
 
-fitz = pytest.importorskip("fitz", reason="PyMuPDF not installed (optional)")
+# `fitz` is the legacy import name; canonical package is now `pymupdf`.
+pymupdf = pytest.importorskip("pymupdf", reason="PyMuPDF not installed (optional)")
 
 
 def compress_pdf(input_path, output_path):
     print(f"Opening {input_path}...")
-    doc = fitz.open(input_path)
+    if not os.path.exists(input_path):
+        raise FileNotFoundError(f"Input PDF not found: {input_path}")
+    doc = pymupdf.open(input_path)
 
     # Save with compression options
     # garbage=4: complete garbage collection and duplicate object merging

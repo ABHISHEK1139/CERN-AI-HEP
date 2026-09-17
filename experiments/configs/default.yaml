@@ -33,7 +33,7 @@ training:
   weight_decay: 0.0001
   patience: 15
   max_grad_norm: 1.0
-  mixed_precision: true     # FP16 saves ~40% VRAM on Ampere
+  mixed_precision: true     # reserved for a future AMP training path (currently unused; trainers run full precision)
 
 # Data splits
 splits:
@@ -42,7 +42,7 @@ splits:
   test: 0.15
   seed: 42
 
-# Anomaly detection
+# Anomaly detection (consumed by AnomalyScorer, not by the trainers)
 anomaly:
   threshold_method: "percentile"  # percentile or sigma
   threshold_percentile: 95

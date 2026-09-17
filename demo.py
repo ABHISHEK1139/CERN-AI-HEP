@@ -39,30 +39,37 @@ This interactive research platform demonstrates an unsupervised anomaly detectio
 It uses a pre-trained **EdgeConv Graph Autoencoder** to rank unusual jet topologies by learning the geometry of Standard Model background-like events.
 """)
 
-# Load Model
-@st.cache_resource
-def load_model(ckpt_path="checkpoints/jetclass_autoencoder/jetclass_edgeconv_best.pt"):
+# Load Model (uncached core; cached alias only inside the Streamlit runtime,
+# where st.cache_resource requires a runtime context to be called).
+def _load_model_uncached(ckpt_path="checkpoints/jetclass_autoencoder/jetclass_edgeconv_best.pt"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     input_dim, hidden_dim, latent_dim = 16, 64, 32
     encoder = EdgeConvEncoder(input_dim=input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim, num_layers=3)
     decoder = GraphDecoder(latent_dim=latent_dim, hidden_dim=hidden_dim, output_dim=input_dim)
     model = GraphAutoencoder(encoder=encoder, decoder=decoder).to(device)
-    
+
     if os.path.exists(ckpt_path):
         ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        if "model_state_dict" not in ckpt:
+            raise KeyError(f"{ckpt_path} has no 'model_state_dict'.")
         model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
     return model, device
 
 
+if _IN_STREAMLIT_RUNTIME:
+    load_model = st.cache_resource(_load_model_uncached)
+else:
+    load_model = _load_model_uncached
+
+
 def _get_model():
     """Lazily load the model so `import demo` stays side-effect free for tests."""
     global model, device
-    try:
+    if globals().get("model") is not None:
         return model, device
-    except NameError:
-        model, device = load_model()
-        return model, device
+    model, device = load_model()
+    return model, device
 
 
 try:
@@ -163,13 +170,16 @@ def run_inference(jet, _model=None, _device=None):
     return score, node_mse
 
 def plot_error_heatmap(jet, node_mse):
+    if getattr(jet, "edge_index", None) is None or jet.edge_index.numel() == 0:
+        raise ValueError("plot_error_heatmap needs a jet with edges.")
     G = nx.Graph()
     edge_index = jet.edge_index.cpu().numpy()
     for i in range(edge_index.shape[1]):
         G.add_edge(edge_index[0, i], edge_index[1, i])
-        
-    plt.style.use('dark_background')
-    fig, ax = plt.subplots(figsize=(4, 3), dpi=150)
+
+    # Scoped style: never leak dark_background into other figures.
+    with plt.style.context('dark_background'):
+        fig, ax = plt.subplots(figsize=(4, 3), dpi=150)
     fig.patch.set_facecolor('none')
     ax.set_facecolor('none')
     
@@ -207,6 +217,8 @@ def display_metrics(jet):
     avg_charge = jet.x[:, 10].mean().item()
     
     edge_index = jet.edge_index.cpu().numpy()
+    # kNN builder emits both directions per neighbor pair, so the graph is
+    # treated as undirected: unique edges = E/2, density over N*(N-1)/2 pairs.
     n_edges = edge_index.shape[1] // 2
     avg_degree = (n_edges * 2) / n_const if n_const > 0 else 0
     density = (2 * n_edges) / (n_const * (n_const - 1)) if n_const > 1 else 0
@@ -320,10 +332,11 @@ if _IN_STREAMLIT_RUNTIME:
         st.markdown("JetClass Anomaly Detection Benchmark Results over 6 Million events.")
 
         benchmark_data = {
-            "Model": ["MLP (Baseline)", "GCN", "EdgeConv (5 Epochs)", "EdgeConv (50 Epochs)"],
-            "AUROC": ["0.6233", "0.6541", "0.6628", "**0.6808**"]
+            "Model": ["MLP (Baseline)", "GCN", "EdgeConv (1 Epoch)", "EdgeConv (5 Epochs)", "EdgeConv (50 Epochs)"],
+            "AUROC": ["0.6233", "0.6541", "0.6536", "0.6628", "0.6808"]
         }
         st.table(pd.DataFrame(benchmark_data))
+        st.caption("Historical reported values from the JetClass QCD-vs-non-QCD ranking benchmark (see README).")
 
         st.markdown("---")
         st.markdown("### Representation Learning Manifold")

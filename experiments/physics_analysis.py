@@ -1,4 +1,3 @@
-import argparse
 import logging
 import sys
 from pathlib import Path
@@ -23,7 +22,7 @@ def compute_jet_kinematics(data):
     Computes Jet pT, Mass, and Particle count for a single jet graph.
     Node features: px=0, py=1, pz=2, energy=3
     """
-    x = data.x.numpy()
+    x = data.x.detach().cpu().numpy()
     px = np.sum(x[:, 0])
     py = np.sum(x[:, 1])
     pz = np.sum(x[:, 2])
@@ -88,8 +87,10 @@ def run_physics_analysis():
 
     # Sort by anomaly score
     results.sort(key=lambda x: x['score'])
-    
-    # Define "Normal" (bottom 50%) and "Anomalous" (top 10%)
+
+    # Exploratory quantile split (NOT a calibrated decision rule): bottom 50%
+    # vs top 10% only visualizes score-observable correlations. For research
+    # decisions use AnomalyScorer.select_threshold on validation scores.
     normal = results[:int(len(results)*0.5)]
     anomalous = results[int(len(results)*0.9):]
     
@@ -104,16 +105,24 @@ def run_physics_analysis():
     axs[0].set_title('Jet Particle Multiplicity')
     axs[0].legend()
     
-    # Plot 2: Mass
-    axs[1].hist([x['mass'] for x in normal], bins=30, range=(0, 300), alpha=0.5, label='Normal (Low Score)', density=True, color='blue')
-    axs[1].hist([x['mass'] for x in anomalous], bins=30, range=(0, 300), alpha=0.5, label='Anomalous (High Score)', density=True, color='red')
+    # Plot 2: Mass (range clips overflow; overflow counts are logged below)
+    mass_all = [x['mass'] for x in results]
+    mass_lo, mass_hi = 0, 300
+    logger.info(f"Mass overflow beyond [{mass_lo}, {mass_hi}]: "
+                f"{sum(m < mass_lo or m > mass_hi for m in mass_all)}/{len(mass_all)}")
+    axs[1].hist([x['mass'] for x in normal], bins=30, range=(mass_lo, mass_hi), alpha=0.5, label='Normal (Low Score)', density=True, color='blue')
+    axs[1].hist([x['mass'] for x in anomalous], bins=30, range=(mass_lo, mass_hi), alpha=0.5, label='Anomalous (High Score)', density=True, color='red')
     axs[1].set_xlabel('Jet Mass (GeV)')
     axs[1].set_title('Jet Mass Distribution')
     axs[1].legend()
     
-    # Plot 3: pT
-    axs[2].hist([x['pt'] for x in normal], bins=30, range=(200, 1000), alpha=0.5, label='Normal (Low Score)', density=True, color='blue')
-    axs[2].hist([x['pt'] for x in anomalous], bins=30, range=(200, 1000), alpha=0.5, label='Anomalous (High Score)', density=True, color='red')
+    # Plot 3: pT (range clips overflow; overflow counts are logged below)
+    pt_all = [x['pt'] for x in results]
+    pt_lo, pt_hi = 200, 1000
+    logger.info(f"pT overflow beyond [{pt_lo}, {pt_hi}]: "
+                f"{sum(p < pt_lo or p > pt_hi for p in pt_all)}/{len(pt_all)}")
+    axs[2].hist([x['pt'] for x in normal], bins=30, range=(pt_lo, pt_hi), alpha=0.5, label='Normal (Low Score)', density=True, color='blue')
+    axs[2].hist([x['pt'] for x in anomalous], bins=30, range=(pt_lo, pt_hi), alpha=0.5, label='Anomalous (High Score)', density=True, color='red')
     axs[2].set_xlabel('Jet pT (GeV)')
     axs[2].set_title('Jet Transverse Momentum (pT)')
     axs[2].legend()

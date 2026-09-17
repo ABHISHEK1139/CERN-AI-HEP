@@ -43,7 +43,14 @@ class LHCODataset(InMemoryDataset):
 
     @property
     def processed_file_names(self):
-        return [f"lhco_dataset{'_' + str(self.sample_size) if self.sample_size else ''}.pt"]
+        # Include source mtime/size so an updated H5 never reuses a stale cache.
+        tag = f"_{self.sample_size}" if self.sample_size else ""
+        try:
+            st = Path(self.h5_path).stat()
+            tag += f"_m{int(st.st_mtime)}_s{st.st_size}"
+        except OSError:
+            pass
+        return [f"lhco_dataset{tag}.pt"]
 
     def process(self):
         if not Path(self.h5_path).exists():
@@ -159,6 +166,12 @@ class LHCODataset(InMemoryDataset):
         train_ds, val_ds, test_ds = self.get_splits(
             train_ratio, val_ratio, test_ratio, seed
         )
+        for _name, _ds in (("train", train_ds), ("val", val_ds), ("test", test_ds)):
+            if len(_ds) == 0:
+                logger.warning(
+                    f"Empty {_name} split from {len(self)} events "
+                    f"(ratios {train_ratio}/{val_ratio}/{test_ratio})."
+                )
 
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
         val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)

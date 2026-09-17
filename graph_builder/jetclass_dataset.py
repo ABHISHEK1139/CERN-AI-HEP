@@ -86,11 +86,17 @@ class JetClassDataset(InMemoryDataset):
         self.sample_size = sample_size
         self.tag = tag
 
-        # Include k/max_particles in the cache key: reusing a k=8 cache for a
-        # k=16 ablation silently invalidates the experiment.
+        # Include k/max_particles AND a hash of the source file list in the cache
+        # key: reusing a k=8 cache for a k=16 ablation (or a different file set
+        # under the same tag) silently invalidates the experiment.
+        import hashlib
+
+        files_key = hashlib.md5(
+            "|".join(sorted(str(f) for f in root_file_paths)).encode()
+        ).hexdigest()[:8]
         self._processed_file_name = (
             f"jetclass_{tag}_{sample_size if sample_size else 'all'}"
-            f"_k{k_neighbors}_nmax{max_particles}.pt"
+            f"_k{k_neighbors}_nmax{max_particles}_{files_key}.pt"
         )
 
         super().__init__(root, transform, pre_transform)
@@ -141,6 +147,8 @@ class JetClassDataset(InMemoryDataset):
 
     def process(self):
         logger.info(f"Processing JetClass data from {len(self.root_file_paths)} file(s)...")
+        # NOTE: whole files are read into RAM here. For 100M-scale training use
+        # JetClassIterableDataset (chunked streaming) or preprocess_6m.py instead.
 
         all_features = []  # List of awkward arrays per file
         all_labels = []
@@ -169,14 +177,19 @@ class JetClassDataset(InMemoryDataset):
 
         n_total = len(features)
         logger.info(f"Total jets across all files: {n_total}")
+        if n_total == 0:
+            raise ValueError("JetClass processing found 0 jets in the input files.")
 
         # Sample if requested (isolated RNG: do not pollute global np.random state)
-        if self.sample_size is not None and self.sample_size < n_total:
-            rng = np.random.RandomState(42)
-            indices = rng.choice(n_total, self.sample_size, replace=False)
-            features = features[indices]
-            labels = labels[indices]
-            logger.info(f"Sampled {self.sample_size} jets.")
+        if self.sample_size is not None:
+            if self.sample_size < 1:
+                raise ValueError(f"sample_size must be >= 1, got {self.sample_size}.")
+            if self.sample_size < n_total:
+                rng = np.random.RandomState(42)
+                indices = rng.choice(n_total, self.sample_size, replace=False)
+                features = features[indices]
+                labels = labels[indices]
+                logger.info(f"Sampled {self.sample_size} jets.")
 
         # Determine binary labels: QCD=0, everything else=1
         is_qcd = ak.to_numpy(labels["label_QCD"]).astype(bool)
@@ -294,6 +307,12 @@ class JetClassDataset(InMemoryDataset):
         train_ds, val_ds, test_ds = self.get_splits(
             train_ratio, val_ratio, test_ratio, seed
         )
+        for _name, _ds in (("train", train_ds), ("val", val_ds), ("test", test_ds)):
+            if len(_ds) == 0:
+                logger.warning(
+                    f"Empty {_name} split from {len(self)} jets "
+                    f"(ratios {train_ratio}/{val_ratio}/{test_ratio})."
+                )
 
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
         val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)

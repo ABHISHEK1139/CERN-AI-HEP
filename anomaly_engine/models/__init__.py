@@ -27,6 +27,9 @@ ENCODERS = {
     "gat": GATEncoder,
     "edgeconv": EdgeConvEncoder,
 }
+# NOTE: "edgeconv" is encoder-only (EdgeConvEncoder); there is no EdgeConv
+# classifier, so CLASSIFIERS intentionally omits it. Pair the encoder with
+# GraphDecoder via get_autoencoder("edgeconv", ...) for anomaly detection.
 
 
 def get_classifier(name: str, **kwargs):
@@ -44,7 +47,12 @@ def get_encoder(name: str, **kwargs):
 
 
 def get_autoencoder(encoder_name: str, **kwargs):
-    """Get autoencoder with specified encoder architecture."""
+    """Get autoencoder with specified encoder architecture.
+
+    NOTE: all **kwargs go to the encoder; the decoder only takes
+    latent_dim/hidden_dim/input_dim from the same kwargs. Pass
+    classifier-only args (e.g. num_classes) to get_classifier instead.
+    """
     encoder = get_encoder(encoder_name, **kwargs)
     decoder = GraphDecoder(
         latent_dim=kwargs.get("latent_dim", 32),

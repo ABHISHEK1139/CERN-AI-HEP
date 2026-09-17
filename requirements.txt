@@ -50,3 +50,6 @@ streamlit>=1.30.0
 networkx>=3.0
 markdown-pdf>=1.3
 PyMuPDF>=1.23  # `fitz` used by scripts/trim + scratch/test_compress
+
+# Testing (CI + local)
+pytest>=7.0

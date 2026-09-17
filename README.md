@@ -100,6 +100,9 @@ The remaining 45 epochs produced only a modest improvement of 0.018 AUROC, indic
 
 ## Figures
 
+Committed plots under `docs/` are historical reference figures. Re-running
+`produce_evidence.py` / training scripts writes fresh figures to `results/`.
+
 ### Training Curve
 <img src="docs/loss_curve.png" width="600" alt="Training Curve">
 

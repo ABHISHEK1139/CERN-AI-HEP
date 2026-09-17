@@ -1,5 +1,4 @@
 import logging
-import math
 from typing import List, Iterator
 import numpy as np
 import awkward as ak
@@ -87,7 +86,7 @@ class JetClassIterableDataset(IterableDataset):
             logger.info(f"  Streaming {fpath}...")
             try:
                 with uproot.open(fpath) as file:
-                    tree_key = next((k for k in file.keys() if "tree" in k.lower()), None)
+                    tree_key = next((k for k in file.keys() if k.split(";")[0].lower() == "tree"), None)
                     if not tree_key:
                         continue
                     tree = file[tree_key]
@@ -112,6 +111,13 @@ class JetClassIterableDataset(IterableDataset):
                         binary_labels = (~is_qcd).astype(np.int64)
 
                         for i in range(n_jets):
+                            # Resume support: skip already-trained jets first.
+                            # (Approximate: start_idx counts yielded graphs while
+                            # this counts jets; <2-particle jets are rare, so the
+                            # drift is negligible compared to replaying everything.)
+                            if jets_to_skip > 0:
+                                jets_to_skip -= 1
+                                continue
                             length = min(int(lengths[i]), self.max_particles)
                             if length < 2:
                                 continue

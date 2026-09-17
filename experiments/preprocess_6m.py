@@ -28,8 +28,9 @@ def preprocess_files(root_files, output_dir, max_particles=128, chunk_size=50000
         print(f"Processing {fpath}...")
         try:
             with uproot.open(fpath) as file:
-                tree_key = next((k for k in file.keys() if "tree" in k.lower()), None)
+                tree_key = next((k for k in file.keys() if k.split(";")[0].lower() == "tree"), None)
                 if not tree_key:
+                    print(f"  Skipping {fpath}: no 'tree'.")
                     continue
                 tree = file[tree_key]
                 
@@ -39,6 +40,10 @@ def preprocess_files(root_files, output_dir, max_particles=128, chunk_size=50000
                         print(f"  Skipping {out_file} (already exists)")
                         chunk_idx += 1
                         continue
+                    # NOTE: pad_none(..., clip=True) keeps the first `max_particles`
+                    # per jet. JetClass stores constituents pT-descending, so this
+                    # matches the dataset's highest-pT trim. Chunks are saved
+                    # dense [chunk, 128, 16] (~410MB at chunk_size=50000).
                         
                     n_jets = len(arrays)
                     lengths = ak.to_numpy(ak.num(arrays["part_px"]))

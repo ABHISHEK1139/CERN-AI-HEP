@@ -33,7 +33,9 @@ def test_get_sample_jet_handles_missing_data():
     jet_bg = get_sample_jet("bg", 42)
     jet_sig = get_sample_jet("sig", 42)
     assert jet_bg is not None and jet_sig is not None
-    assert not torch.allclose(jet_bg.x, jet_sig.x)
+    # Different jets may have different node counts; compare safely.
+    same_shape = jet_bg.x.shape == jet_sig.x.shape
+    assert not (same_shape and bool(torch.allclose(jet_bg.x, jet_sig.x)))
 
 
 if __name__ == "__main__":

@@ -35,10 +35,21 @@ logger = logging.getLogger(__name__)
 
 
 def get_gpu_memory_mb():
-    """Returns current GPU memory allocated in MB."""
+    """Returns peak GPU memory allocated in MB (resets the peak counter)."""
     if torch.cuda.is_available():
-        return torch.cuda.memory_allocated() / 1024 / 1024
+        torch.cuda.reset_peak_memory_stats()
+        return torch.cuda.max_memory_allocated() / 1024 / 1024
     return 0.0
+
+
+def _graph_batch(graph):
+    """Batch vector for a single Data graph (None-safe)."""
+    batch = getattr(graph, "batch", None)
+    if batch is None:
+        batch = torch.zeros(
+            graph.x.size(0), dtype=torch.long, device=graph.x.device
+        )
+    return batch
 
 
 def benchmark_pyg(sample_graphs, device, n_passes=100):
@@ -51,10 +62,12 @@ def benchmark_pyg(sample_graphs, device, n_passes=100):
     # Load best checkpoint if available
     ckpt_path = Path("checkpoints/jetclass_autoencoder/jetclass_edgeconv_best.pt")
     if ckpt_path.exists():
-        model.load_state_dict(
-            torch.load(ckpt_path, map_location=device, weights_only=False)["model_state_dict"]
-        )
-        logger.info("Loaded trained weights for PyG benchmark.")
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        if "model_state_dict" in ckpt:
+            model.load_state_dict(ckpt["model_state_dict"])
+            logger.info("Loaded trained weights for PyG benchmark.")
+        else:
+            logger.warning(f"{ckpt_path} has no 'model_state_dict'; using random weights.")
 
     # Warmup
     with torch.no_grad():
@@ -62,12 +75,14 @@ def benchmark_pyg(sample_graphs, device, n_passes=100):
             _ = model(g.to(device))
 
     torch.cuda.synchronize() if torch.cuda.is_available() else None
+    # Pre-move graphs so timed loop measures inference, not H2D copies.
+    dev_graphs = [g.to(device) for g in sample_graphs]
     mem_before = get_gpu_memory_mb()
 
     start = time.perf_counter()
     with torch.no_grad():
         for i in range(n_passes):
-            g = sample_graphs[i % len(sample_graphs)].to(device)
+            g = dev_graphs[i % len(dev_graphs)]
             _ = model(g)
     torch.cuda.synchronize() if torch.cuda.is_available() else None
     elapsed = time.perf_counter() - start
@@ -77,7 +92,11 @@ def benchmark_pyg(sample_graphs, device, n_passes=100):
 
 
 def benchmark_modulus(sample_graphs, device, n_passes=100):
-    """Benchmark using NVIDIA Modulus FullyConnected as decoder."""
+    """Benchmark using NVIDIA Modulus FullyConnected as decoder.
+
+    NOTE: no trained weights exist for the Modulus decoder, so it runs
+    randomly initialized. This comparison is latency-only, not physics.
+    """
     from modulus.models.mlp import FullyConnected
     from torch_geometric.nn import global_mean_pool
 
@@ -99,19 +118,23 @@ def benchmark_modulus(sample_graphs, device, n_passes=100):
     with torch.no_grad():
         for g in sample_graphs[:5]:
             g = g.to(device)
-            z = encoder(g.x, g.edge_index, g.batch)
-            z_pooled = global_mean_pool(z, g.batch)
+            batch = _graph_batch(g)
+            z = encoder(g.x, g.edge_index, batch)
+            z_pooled = global_mean_pool(z, batch)
             _ = modulus_decoder(z_pooled)
 
     torch.cuda.synchronize() if torch.cuda.is_available() else None
+    # Pre-move graphs so timed loop measures inference, not H2D copies.
+    dev_graphs = [g.to(device) for g in sample_graphs]
     mem_before = get_gpu_memory_mb()
 
     start = time.perf_counter()
     with torch.no_grad():
         for i in range(n_passes):
-            g = sample_graphs[i % len(sample_graphs)].to(device)
-            z = encoder(g.x, g.edge_index, g.batch)
-            z_pooled = global_mean_pool(z, g.batch)
+            g = dev_graphs[i % len(dev_graphs)]
+            batch = _graph_batch(g)
+            z = encoder(g.x, g.edge_index, batch)
+            z_pooled = global_mean_pool(z, batch)
             _ = modulus_decoder(z_pooled)
     torch.cuda.synchronize() if torch.cuda.is_available() else None
     elapsed = time.perf_counter() - start

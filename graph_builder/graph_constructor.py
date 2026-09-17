@@ -72,9 +72,14 @@ class EventGraphConstructor:
         """
         from torch_geometric.data import Data
 
+        if "particles" not in event:
+            raise KeyError(f"event_to_graph requires 'particles', got keys {sorted(event.keys())}")
         particles = event["particles"]
         n_particles = len(particles)
 
+        # Hard graph minimum: <2 particles cannot form edges. (This is distinct
+        # from EventConfig.min_particles, which is a physics selection cut
+        # applied upstream in the loader.)
         if n_particles < 2:
             # Need at least 2 particles to form edges
             logger.warning(f"Event {event.get('event_id', '?')}: only {n_particles} particles, skipping")
@@ -85,6 +90,8 @@ class EventGraphConstructor:
         x = torch.tensor(x, dtype=torch.float32)
 
         # ---- Edge construction ----
+        if self.k <= 0:
+            raise ValueError(f"k must be >= 1 for kNN graphs, got k={self.k}.")
         if self.strategy == "knn":
             edge_index = self._build_knn_edges(particles, min(self.k, n_particles - 1))
         elif self.strategy == "fully_connected":
@@ -124,8 +131,11 @@ class EventGraphConstructor:
                 [1 if event["is_anomaly"] else 0], dtype=torch.long
             )
 
-        # Metadata
-        data.event_id = event.get("event_id", -1)
+        # Metadata (int event_id keeps PyG Batch collation well-defined)
+        try:
+            data.event_id = int(event.get("event_id", -1))
+        except (TypeError, ValueError):
+            data.event_id = -1
 
         return data
 
@@ -150,8 +160,8 @@ class EventGraphConstructor:
                 src.append(j)
                 dst.append(i)
 
-        # Remove duplicates
-        edges = set(zip(src, dst))
+        # Remove duplicates (sorted for deterministic edge order across runs)
+        edges = sorted(set(zip(src, dst)))
         if edges:
             src, dst = zip(*edges)
             return np.array([list(src), list(dst)])
@@ -255,8 +265,11 @@ def main():
     all_events = []
     all_labels = []
     for f in data_files:
-        if f.suffix == ".npz":
+        if f.suffix.lower() == ".npz":
             data = np.load(f, allow_pickle=True)
+            if "events" not in data or "labels" not in data:
+                print(f"Skipping {f}: expected 'events'/'labels' arrays.")
+                continue
             events = data["events"].tolist()
             labels = data["labels"]
             all_events.extend(events)

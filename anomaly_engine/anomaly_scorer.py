@@ -59,6 +59,11 @@ class AnomalyScorer:
         for data in loader:
             data = data.to(self.device)
             result = self.model(data)
+            if not isinstance(result, dict) or "per_graph_loss" not in result:
+                raise TypeError(
+                    "AnomalyScorer needs an autoencoder returning "
+                    "dict(per_graph_loss=...)."
+                )
 
             scores = result["per_graph_loss"].cpu().numpy()
             all_scores.extend(scores)
@@ -106,6 +111,8 @@ class AnomalyScorer:
             List of dicts with event_id, score, rank.
         """
         sorted_idx = np.argsort(scores)[::-1]  # highest score first
+        if top_k <= 0:
+            return []
         top_k = min(top_k, len(scores))
 
         results = []
@@ -142,6 +149,8 @@ class AnomalyScorer:
         Returns:
             Threshold value.
         """
+        if len(scores) == 0:
+            raise ValueError("select_threshold received empty scores.")
         if method == "percentile":
             threshold = np.percentile(scores, percentile)
         elif method == "sigma":
@@ -176,6 +185,8 @@ class AnomalyScorer:
         Returns:
             Report dict with rankings, thresholds, and metrics.
         """
+        if len(scores) == 0:
+            raise ValueError("generate_report received empty scores.")
         report = {
             "n_events": len(scores),
             "score_stats": {
@@ -193,8 +204,10 @@ class AnomalyScorer:
             },
         }
 
-        # If labels available, compute detection metrics
-        if len(labels) > 0:
+        # If per-graph labels are fully available, compute detection metrics.
+        # (Batches without data.y are skipped in score_dataset, so a length
+        # mismatch means labels are partial — skip metrics instead of misaligning.)
+        if len(labels) == len(scores) and len(labels) > 0:
             from sklearn.metrics import roc_auc_score, average_precision_score
 
             if len(np.unique(labels)) > 1:
@@ -242,6 +255,6 @@ class AnomalyScorer:
         print()
         print("  Top 10 most anomalous events:")
         for entry in report["top_anomalies"][:10]:
-            print(f"    #{entry['rank']:3d}  Event {entry['event_id']:6d}  "
+            print(f"    #{entry['rank']:3d}  Event {str(entry['event_id']):>6}  "
                   f"Score: {entry['anomaly_score']:.6f}")
         print("=" * 60)

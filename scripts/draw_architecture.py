@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from pathlib import Path
 
 def draw_diagram():
     fig, ax = plt.subplots(figsize=(8, 10))
@@ -13,7 +14,7 @@ def draw_diagram():
         "GPU Graph Construction\n(k-NN in \u0397-\u03A6 Space, k=8)",
         "EdgeConv GNN Encoder\n(Dynamic Latent Topology)",
         "Latent Space Representation\n(Bottleneck Vector z)",
-        "Fully Connected Decoder\n(Accelerated by PhysicsNeMo)",
+        "Fully Connected Decoder\n(PyG-native; PhysicsNeMo-compatible)",
         "Reconstruction Error\n(Mean Squared Error)",
         "Thresholding & Score Evaluation\n(Anomaly Classification)"
     ]
@@ -42,6 +43,7 @@ def draw_diagram():
             
     # Save diagram
     plt.tight_layout()
+    Path("docs").mkdir(parents=True, exist_ok=True)
     plt.savefig("docs/architecture.png", dpi=300, bbox_inches='tight')
     plt.close()
     print("Architecture diagram successfully generated: docs/architecture.png")

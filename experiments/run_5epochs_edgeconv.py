@@ -58,7 +58,9 @@ def build_knn_graph_gpu(x, batch, k=8):
     B, N_max, _ = dense_pos.shape
     
     dist = torch.cdist(dense_pos, dense_pos)
+    # Mask padded rows (invalid sources) AND padded columns (invalid targets).
     dist.masked_fill_(~mask.unsqueeze(1), float('inf'))
+    dist.masked_fill_(~mask.unsqueeze(2), float('inf'))
     dist.diagonal(dim1=1, dim2=2).fill_(float('inf'))
     
     actual_k = min(k, N_max - 1)
@@ -97,11 +99,11 @@ def evaluate(model, val_loader, device):
     from sklearn.metrics import roc_auc_score
     if len(np.unique(labels)) < 2:
         return 0.5
-    temp_auroc = roc_auc_score(labels, scores)
-    if temp_auroc < 0.5:
-        scores = -scores
-        temp_auroc = roc_auc_score(labels, scores)
-    return temp_auroc
+    # Raw AUROC, no post-hoc flip: flipping on test scores inflates the metric.
+    raw_auroc = roc_auc_score(labels, scores)
+    if raw_auroc < 0.5:
+        print(f"  Note: raw AUROC {raw_auroc:.4f} < 0.5 (inverse scoring).")
+    return raw_auroc
 
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -161,6 +163,9 @@ def main():
             if i % 100 == 0:
                 print(f"  Batch {i}: Loss {loss.item():.4f}")
                 
+        if n_batches == 0:
+            print("  Warning: 0 training batches (no chunks yielded data). Skipping epoch.")
+            continue
         avg_loss = running_loss / n_batches
         auroc = evaluate(model, val_loader, device)
         print(f"Epoch {epoch} finished. Avg Loss: {avg_loss:.4f}, Validation AUROC: {auroc:.4f}")

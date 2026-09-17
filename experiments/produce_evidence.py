@@ -1,4 +1,3 @@
-import argparse
 import logging
 from pathlib import Path
 import torch
@@ -42,20 +41,26 @@ def plot_loss_curve(checkpoint_path, output_path):
     logger.info(f"Saved {output_path}")
 
 def draw_event_graph(data, output_path):
+    if getattr(data, "edge_index", None) is None or data.edge_index.numel() == 0:
+        logger.warning("Skipping event graph: jet has no edges.")
+        return
     G = nx.Graph()
     edge_index = data.edge_index.cpu().numpy()
     for i in range(edge_index.shape[1]):
         u, v = edge_index[0, i], edge_index[1, i]
         G.add_edge(u, v)
-    
+
     plt.figure(figsize=(8, 8))
     pos = nx.spring_layout(G, seed=42)
-    # Using dark mode aesthetic
-    plt.style.use('dark_background')
-    nx.draw(G, pos, node_size=20, node_color='#00ffcc', edge_color='#444444', alpha=0.7)
-    plt.title("JetClass Particle Cloud (k-NN Graph)", color='white')
-    plt.savefig(output_path, dpi=300, facecolor='black', bbox_inches='tight')
-    plt.style.use('default')
+    # Using dark mode aesthetic (scoped; restored even on failure)
+    prev_style = plt.rcParams.copy()
+    try:
+        plt.style.use('dark_background')
+        nx.draw(G, pos, node_size=20, node_color='#00ffcc', edge_color='#444444', alpha=0.7)
+        plt.title("JetClass Particle Cloud (k-NN Graph)", color='white')
+        plt.savefig(output_path, dpi=300, facecolor='black', bbox_inches='tight')
+    finally:
+        plt.rcParams.update(prev_style)
     plt.close()
     logger.info(f"Saved {output_path}")
 
@@ -91,7 +96,11 @@ def generate_evidence():
     model = GraphAutoencoder(encoder=encoder, decoder=decoder).to(device)
     
     if Path(ckpt_path).exists():
-        model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=False)["model_state_dict"])
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        if "model_state_dict" not in ckpt:
+            logger.warning(f"{ckpt_path} has no 'model_state_dict'; using random weights.")
+        else:
+            model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
 
     all_scores, all_labels, all_latents = [], [], []
@@ -99,6 +108,8 @@ def generate_evidence():
         for data in test_loader:
             data = data.to(device)
             res = model(data)
+            if "per_graph_loss" not in res or "z" not in res:
+                raise KeyError("Expected autoencoder output keys 'per_graph_loss' and 'z'.")
             all_scores.extend(res['per_graph_loss'].cpu().numpy())
             all_labels.extend(data.y.cpu().numpy().flatten())
             # For t-SNE, pool latent features per graph using mean
@@ -110,17 +121,24 @@ def generate_evidence():
     labels = np.array(all_labels)
     latents = np.vstack(all_latents)
 
-    # Auto-flip scores if AUROC < 0.5
+    # Report raw AUROC first; only direction-correct for plots (labeled as such).
+    # Post-hoc flipping on test scores would inflate the headline metric.
     fpr, tpr, _ = roc_curve(labels, scores)
-    roc_auc = auc(fpr, tpr)
-    if roc_auc < 0.5:
+    raw_auc = auc(fpr, tpr)
+    logger.info(f"Raw test AUROC (no flip): {raw_auc:.4f}")
+    if raw_auc < 0.5:
+        logger.warning("Raw AUROC < 0.5 (inverse scoring); plots use direction-corrected scores.")
         scores = -scores
         fpr, tpr, _ = roc_curve(labels, scores)
         roc_auc = auc(fpr, tpr)
+        roc_label = f'EdgeConv (AUC = {roc_auc:.4f}, direction-corrected; raw {raw_auc:.4f})'
+    else:
+        roc_auc = raw_auc
+        roc_label = f'EdgeConv (AUC = {roc_auc:.4f})'
 
     # 3. Plot ROC Curve
     plt.figure(figsize=(8, 6))
-    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'EdgeConv (AUC = {roc_auc:.4f})')
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label=roc_label)
     plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
@@ -151,10 +169,12 @@ def generate_evidence():
     bg_scores = scores[labels == 0]
     sig_scores = scores[labels == 1]
     
-    # Clip extreme outliers for better visualization
+    # Clip extreme outliers for better visualization (overflow counts logged)
     q_high = np.percentile(scores, 95)
     q_low = np.percentile(scores, 5)
     bins = np.linspace(q_low, q_high, 50)
+    n_clipped = int(((scores < q_low) | (scores > q_high)).sum())
+    logger.info(f"Anomaly histogram clips {n_clipped}/{len(scores)} scores outside 5-95%.")
     
     plt.hist(bg_scores, bins=bins, alpha=0.6, color='blue', label='Standard Model Background', density=True)
     plt.hist(sig_scores, bins=bins, alpha=0.6, color='red', label='Higgs Signal', density=True)
@@ -168,7 +188,12 @@ def generate_evidence():
 
     # 5. Plot t-SNE
     logger.info("Computing t-SNE (this may take a minute)...")
-    tsne = TSNE(n_components=2, random_state=42)
+    if not np.isfinite(latents).all():
+        raise ValueError("t-SNE latents contain NaN/inf.")
+    if len(latents) < 2:
+        raise ValueError("t-SNE needs at least 2 graphs.")
+    perplexity = max(1, min(30, len(latents) - 1))
+    tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity)
     latents_2d = tsne.fit_transform(latents)
 
     plt.figure(figsize=(8, 6))

@@ -42,10 +42,17 @@ class CMSDataset(InMemoryDataset):
         self.sample_size = sample_size
 
         # We define a custom processed file name based on the root file name and sample size.
-        # Include the parent directory to avoid collisions on identical stems.
+        # Include the parent directory and source mtime/size to avoid collisions
+        # on identical stems and stale reuse after file updates.
         file_path = Path(self.root_file_path)
         file_base = f"{file_path.parent.name}_{file_path.stem}"
-        self._processed_file_name = f"cms_{file_base}_label{label}_{sample_size if sample_size else 'all'}.pt"
+        src_tag = ""
+        try:
+            st = file_path.stat()
+            src_tag = f"_m{int(st.st_mtime)}_s{st.st_size}"
+        except OSError:
+            pass
+        self._processed_file_name = f"cms_{file_base}_label{label}_{sample_size if sample_size else 'all'}{src_tag}.pt"
 
         super().__init__(root, transform, pre_transform)
         self.data, self.slices = torch.load(
@@ -97,13 +104,20 @@ class CMSDataset(InMemoryDataset):
         mass = mass[mask]
         
         logger.info(f"Filtered to {len(pt)} events with >= 2 jets.")
-        
-        if self.sample_size is not None and self.sample_size < len(pt):
-            # Since awkward arrays don't have a direct random sample, we do it via numpy indices
-            # (isolated RNG: do not pollute global np.random state)
-            rng = np.random.RandomState(42)
-            indices = rng.choice(len(pt), self.sample_size, replace=False)
-            pt = pt[indices]
+        if len(pt) == 0:
+            raise ValueError(
+                f"No events with >= 2 jets in {self.root_file_path}."
+            )
+
+        if self.sample_size is not None:
+            if self.sample_size < 1:
+                raise ValueError(f"sample_size must be >= 1, got {self.sample_size}.")
+            if self.sample_size < len(pt):
+                # Since awkward arrays don't have a direct random sample, we do it via numpy indices
+                # (isolated RNG: do not pollute global np.random state)
+                rng = np.random.RandomState(42)
+                indices = rng.choice(len(pt), self.sample_size, replace=False)
+                pt = pt[indices]
             eta = eta[indices]
             phi = phi[indices]
             mass = mass[indices]
@@ -211,6 +225,12 @@ class CMSDataset(InMemoryDataset):
         train_ds, val_ds, test_ds = self.get_splits(
             train_ratio, val_ratio, test_ratio, seed
         )
+        for _name, _ds in (("train", train_ds), ("val", val_ds), ("test", test_ds)):
+            if len(_ds) == 0:
+                logger.warning(
+                    f"Empty {_name} split from {len(self)} events "
+                    f"(ratios {train_ratio}/{val_ratio}/{test_ratio})."
+                )
 
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
         val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)

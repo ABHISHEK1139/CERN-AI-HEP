@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
+import torch
 
 
 def test_cms_dataset_importable():
@@ -32,9 +33,10 @@ def test_cms_dataset_requires_data():
     )
     assert len(dataset) > 0
     graph = dataset[0]
-    assert graph.x is not None
-    assert graph.edge_index is not None
-    assert graph.y is not None
+    assert graph.x is not None and graph.x.dim() == 2 and graph.x.shape == (2, 4)
+    assert graph.edge_index is not None and graph.edge_index.shape == (2, 2)
+    assert graph.y is not None and int(graph.y.flatten()[0].item()) == 1
+    assert torch.isfinite(graph.x).all()
 
 
 if __name__ == "__main__":
