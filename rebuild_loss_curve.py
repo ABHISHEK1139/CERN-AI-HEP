@@ -4,14 +4,21 @@ import sys
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-log_candidates = [
-    Path(r"C:\Users\ak612\.gemini\antigravity\brain\c04da7fe-c9d0-4f9d-8866-d00cfac8762c\.system_generated\tasks\task-1579.log"),
-    Path(r"C:\Users\ak612\.gemini\antigravity\brain\c04da7fe-c9d0-4f9d-8866-d00cfac8762c\.system_generated\tasks\task-1540.log"),
-    Path("local_error.log"),
-    Path("training.log"),
-]
+log_candidates = []
+if len(sys.argv) > 1:
+    log_candidates.append(Path(sys.argv[1]))
 
-log_file = next((p for p in log_candidates if p.exists()), None)
+log_candidates.extend([
+    Path("training.log"),
+    Path("train.log"),
+    Path("local_error.log"),
+    Path("experiments.log"),
+])
+if Path("logs").is_dir():
+    log_candidates.extend(sorted(Path("logs").glob("*.log")))
+
+
+log_file = next((p for p in log_candidates if p.is_file()), None)
 if log_file is None:
     # Fall back: reuse checkpoint history if present, else exit gracefully.
     ckpt_candidates = [

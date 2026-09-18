@@ -301,29 +301,30 @@ class Evaluator:
 
             if getattr(data, "x", None) is None:
                 raise ValueError("plot_latent_space needs data.x node features.")
-            if hasattr(model, "encoder"):
-                batch = getattr(data, "batch", None)
-                if batch is None:
-                    batch = torch.zeros(
-                        data.x.size(0), dtype=torch.long, device=data.x.device
-                    )
-                z = model.encoder(data.x, data.edge_index, batch)
-            else:
-                # Generic model (e.g. PhysicsNeMo wrapper expects a Data object)
-                try:
-                    z = model(data.x, data.edge_index, data.batch)
-                except Exception:
-                    # Fall back: wrapper-style forward on Data, then pool
-                    graph_emb = model(data)
-                    all_embeddings.append(graph_emb.cpu().numpy())
-                    if data.y is not None:
-                        all_labels.extend(data.y.cpu().numpy().flatten())
-                    continue
-
             batch = getattr(data, "batch", None)
             if batch is None:
-                batch = torch.zeros(z.size(0), dtype=torch.long, device=z.device)
-            graph_emb = global_mean_pool(z, batch)
+                batch = torch.zeros(
+                    data.x.size(0), dtype=torch.long, device=data.x.device
+                )
+
+            if hasattr(model, "encode_graph"):
+                try:
+                    graph_emb = model.encode_graph(data)
+                except Exception:
+                    graph_emb = model.encode_graph(data.x, data.edge_index, batch)
+            elif hasattr(model, "encoder"):
+                z = model.encoder(data.x, data.edge_index, batch)
+                graph_emb = global_mean_pool(z, batch)
+            elif hasattr(model, "get_latent"):
+                graph_emb = model.get_latent(data)
+            else:
+                # Generic model forward
+                out = model(data)
+                if isinstance(out, dict) and "z" in out:
+                    graph_emb = global_mean_pool(out["z"], batch)
+                else:
+                    graph_emb = out
+
             all_embeddings.append(graph_emb.cpu().numpy())
 
             if data.y is not None:
@@ -357,7 +358,7 @@ class Evaluator:
         # Plot
         fig, ax = plt.subplots(figsize=(10, 8))
 
-        if len(labels) > 0:
+        if len(labels) == len(embeddings) and len(labels) > 0:
             normal_mask = labels == 0
             anomaly_mask = labels == 1
             ax.scatter(coords[normal_mask, 0], coords[normal_mask, 1],

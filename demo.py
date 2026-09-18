@@ -180,29 +180,29 @@ def plot_error_heatmap(jet, node_mse):
     # Scoped style: never leak dark_background into other figures.
     with plt.style.context('dark_background'):
         fig, ax = plt.subplots(figsize=(4, 3), dpi=150)
-    fig.patch.set_facecolor('none')
-    ax.set_facecolor('none')
-    
-    # Use actual physics coordinates (eta, phi) for the node layout
-    pos = {i: (jet.x[i, 4].item(), jet.x[i, 5].item()) for i in range(jet.x.size(0))}
-    
-    # Custom colormap visualization
-    sc = nx.draw_networkx_nodes(G, pos, node_size=30, node_color=node_mse, cmap=plt.cm.coolwarm, alpha=0.9, ax=ax, linewidths=0.5, edgecolors='white')
-    nx.draw_networkx_edges(G, pos, edge_color='#666666', alpha=0.4, ax=ax)
-    
-    cbar = plt.colorbar(sc, ax=ax, shrink=0.7, pad=0.02)
-    cbar.set_label("Reconstruction MSE", fontsize=8, color='lightgray')
-    cbar.ax.tick_params(labelsize=7, colors='lightgray')
-    
-    # Format axes to look like a physics plot
-    ax.set_xlabel("\u0394\u03B7 (Pseudo-rapidity)", fontsize=8, color='lightgray')
-    ax.set_ylabel("\u0394\u03C6 (Azimuthal)", fontsize=8, color='lightgray')
-    ax.tick_params(left=True, bottom=True, labelleft=True, labelbottom=True, labelsize=7, colors='lightgray')
-    ax.grid(True, linestyle=':', alpha=0.3, color='gray')
-    for spine in ax.spines.values():
-        spine.set_color('#444444')
+        fig.patch.set_facecolor('none')
+        ax.set_facecolor('none')
         
-    plt.tight_layout()
+        # Use actual physics coordinates (eta, phi) for the node layout
+        pos = {i: (jet.x[i, 4].item(), jet.x[i, 5].item()) for i in range(jet.x.size(0))}
+        
+        # Custom colormap visualization
+        sc = nx.draw_networkx_nodes(G, pos, node_size=30, node_color=node_mse, cmap=plt.cm.coolwarm, alpha=0.9, ax=ax, linewidths=0.5, edgecolors='white')
+        nx.draw_networkx_edges(G, pos, edge_color='#666666', alpha=0.4, ax=ax)
+        
+        cbar = plt.colorbar(sc, ax=ax, shrink=0.7, pad=0.02)
+        cbar.set_label("Reconstruction MSE", fontsize=8, color='lightgray')
+        cbar.ax.tick_params(labelsize=7, colors='lightgray')
+        
+        # Format axes to look like a physics plot
+        ax.set_xlabel("\u0394\u03B7 (Pseudo-rapidity)", fontsize=8, color='lightgray')
+        ax.set_ylabel("\u0394\u03C6 (Azimuthal)", fontsize=8, color='lightgray')
+        ax.tick_params(left=True, bottom=True, labelleft=True, labelbottom=True, labelsize=7, colors='lightgray')
+        ax.grid(True, linestyle=':', alpha=0.3, color='gray')
+        for spine in ax.spines.values():
+            spine.set_color('#444444')
+            
+        plt.tight_layout()
     return fig
 
 def display_metrics(jet):
@@ -217,15 +217,12 @@ def display_metrics(jet):
     avg_charge = jet.x[:, 10].mean().item()
     
     edge_index = jet.edge_index.cpu().numpy()
-    # kNN builder emits both directions per neighbor pair, so the graph is
-    # treated as undirected: unique edges = E/2, density over N*(N-1)/2 pairs.
-    n_edges = edge_index.shape[1] // 2
-    avg_degree = (n_edges * 2) / n_const if n_const > 0 else 0
-    density = (2 * n_edges) / (n_const * (n_const - 1)) if n_const > 1 else 0
-    
     G = nx.Graph()
     for i in range(edge_index.shape[1]):
         G.add_edge(edge_index[0, i], edge_index[1, i])
+    n_edges = G.number_of_edges()
+    avg_degree = (n_edges * 2) / n_const if n_const > 0 else 0
+    density = (2 * n_edges) / (n_const * (n_const - 1)) if n_const > 1 else 0
     components = nx.number_connected_components(G)
     
     c1, c2 = st.columns(2)

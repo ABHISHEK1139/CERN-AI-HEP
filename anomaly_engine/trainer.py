@@ -312,18 +312,21 @@ class Trainer:
         if resume:
             start_epoch, start_batch = self._load_checkpoint_with_batch(f"{run_name}_latest.pt")
             if start_batch > 0:
-                logger.info(f"Resuming within epoch {start_epoch + 1} at batch {start_batch}")
+                logger.info(f"Resuming within epoch {start_epoch} at batch {start_batch}")
                 # Tell IterableDataset to skip
                 if hasattr(train_loader.dataset, 'start_idx'):
-                    train_loader.dataset.start_idx = start_batch * train_loader.batch_size
+                    bs = getattr(train_loader, 'batch_size', 1) or 1
+                    train_loader.dataset.start_idx = start_batch * bs
 
-        for epoch in range(start_epoch + 1, epochs + 1):
+        initial_epoch = start_epoch if start_batch > 0 else start_epoch + 1
+
+        for epoch in range(initial_epoch, epochs + 1):
             train_loss = self._train_epoch_autoencoder(
                 train_loader, 
                 epoch=epoch, 
                 run_name=run_name, 
                 save_steps=save_steps, 
-                start_batch=start_batch if epoch == start_epoch + 1 else 0
+                start_batch=start_batch if (start_batch > 0 and epoch == initial_epoch) else 0
             )
             # Reset start_batch and start_idx after first epoch
             start_batch = 0

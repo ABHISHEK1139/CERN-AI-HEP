@@ -122,7 +122,12 @@ class CNNClassifier(nn.Module):
             batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
 
         # Reconstruct per-graph tensors with padding
-        batch_size = int(batch.max().item()) + 1
+        batch_size = getattr(
+            data, "num_graphs", int(batch.max().item()) + 1 if x.size(0) > 0 else 0
+        )
+        if batch_size == 0:
+            return torch.empty((0, self.classifier[-1].out_features), device=x.device, dtype=x.dtype)
+
         padded = torch.zeros(
             batch_size, self.max_particles, self.input_dim,
             device=x.device, dtype=x.dtype

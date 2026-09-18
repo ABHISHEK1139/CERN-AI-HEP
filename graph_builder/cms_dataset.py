@@ -118,10 +118,10 @@ class CMSDataset(InMemoryDataset):
                 rng = np.random.RandomState(42)
                 indices = rng.choice(len(pt), self.sample_size, replace=False)
                 pt = pt[indices]
-            eta = eta[indices]
-            phi = phi[indices]
-            mass = mass[indices]
-            logger.info(f"Sampled {self.sample_size} events.")
+                eta = eta[indices]
+                phi = phi[indices]
+                mass = mass[indices]
+                logger.info(f"Sampled {self.sample_size} events.")
 
         data_list = []
         # Fully connected 2-node graph: 0->1 and 1->0 (cloned per graph).

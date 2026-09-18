@@ -19,8 +19,9 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import torch
+from torch_geometric.data import Data
 
-from event_ingestion.config import EventConfig, EDGE_FEATURE_DIM, NODE_FEATURE_DIM
+from event_ingestion.config import EventConfig
 from graph_builder.features import FeatureExtractor
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ class EventGraphConstructor:
 
     def event_to_graph(
         self, event: Dict[str, Any], label: Optional[int] = None
-    ) -> "torch_geometric.data.Data":
+    ) -> Optional[Data]:
         """
         Convert a single event to a PyTorch Geometric Data object.
 
@@ -70,7 +71,6 @@ class EventGraphConstructor:
         Returns:
             PyG Data object with node features, edge_index, edge_attr, and label.
         """
-        from torch_geometric.data import Data
 
         if "particles" not in event:
             raise KeyError(f"event_to_graph requires 'particles', got keys {sorted(event.keys())}")
@@ -233,6 +233,38 @@ class EventGraphConstructor:
         )
         return graphs
 
+    def save_dataset(
+        self,
+        events: List[Dict[str, Any]],
+        labels: Optional[np.ndarray] = None,
+        output_dir: Union[str, Path] = ".",
+    ) -> List[Data]:
+        """
+        Convert events and save synchronized graphs.pt and labels.pt to output_dir.
+
+        Args:
+            events: List of event dicts.
+            labels: Optional label array.
+            output_dir: Directory path where graphs.pt and labels.pt are saved.
+
+        Returns:
+            List of successfully built PyG Data objects.
+        """
+        graphs = self.convert_dataset(events, labels)
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        if not graphs:
+            logger.warning("No graphs built (all events skipped). Nothing to save.")
+            return []
+
+        torch.save(graphs, output_path / "graphs.pt")
+        valid_labels = [int(g.y.item()) for g in graphs if hasattr(g, "y") and g.y is not None]
+        if len(valid_labels) == len(graphs):
+            torch.save(torch.tensor(valid_labels, dtype=torch.long), output_path / "labels.pt")
+
+        return graphs
+
 
 def main():
     """CLI entry point for graph construction."""
@@ -285,18 +317,12 @@ def main():
     constructor = EventGraphConstructor(
         strategy=args.strategy, k=args.k, delta_r_threshold=args.delta_r
     )
-    graphs = constructor.convert_dataset(all_events, labels)
-
-    # Save
     output_path = Path(args.output)
-    output_path.mkdir(parents=True, exist_ok=True)
+    graphs = constructor.save_dataset(all_events, labels, output_path)
 
     if not graphs:
         print("No graphs built (all events skipped). Nothing to save.")
         return
-
-    torch.save(graphs, output_path / "graphs.pt")
-    torch.save(labels, output_path / "labels.pt")
 
     print(f"\nSaved {len(graphs)} graphs to {output_path / 'graphs.pt'}")
     print(f"Node feature dim: {graphs[0].x.shape[1]}")

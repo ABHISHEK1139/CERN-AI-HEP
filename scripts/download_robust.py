@@ -7,8 +7,9 @@ output_path = "data/cms/dyjets/DYJetsToLL.root"
 
 def download_file(url, path):
     print(f"Starting download of {url}")
-    # ensure dir exists
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    dir_name = os.path.dirname(path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
     
     headers = {}
     
@@ -48,15 +49,17 @@ def download_file(url, path):
             pass
         return False
 
-# Try up to 10 times
-max_retries = 10
-for attempt in range(1, max_retries + 1):
-    print(f"Attempt {attempt}/{max_retries}")
-    if download_file(url, output_path):
-        break
-    else:
-        if attempt == max_retries:
-            print("All retries exhausted.")
-            raise SystemExit(1)
-        print("Retrying in 10 seconds...")
-        time.sleep(10)
+if __name__ == "__main__":
+    # Try up to 10 times
+    max_retries = 10
+    for attempt in range(1, max_retries + 1):
+        print(f"Attempt {attempt}/{max_retries}")
+        if download_file(url, output_path):
+            break
+        else:
+            if attempt == max_retries:
+                print("All retries exhausted.")
+                raise SystemExit(1)
+            print("Retrying in 10 seconds...")
+            time.sleep(10)
+

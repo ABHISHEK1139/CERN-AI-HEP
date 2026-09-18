@@ -76,9 +76,10 @@ def build_knn_graph_gpu(x, batch, k=8):
     valid = mask.unsqueeze(-1).expand(B, N_max, actual_k)
     source_global = dense_global_idx.unsqueeze(-1).expand(B, N_max, actual_k)[valid]
     
-    target_global = torch.gather(dense_global_idx.unsqueeze(-1).expand(B, N_max, N_max), 2, topk_idx)[valid]
+    target_global = torch.gather(dense_global_idx.unsqueeze(1).expand(B, N_max, N_max), 2, topk_idx)[valid]
     
-    valid_edges = (target_global != -1) & (source_global != -1)
+    dist_topk = torch.gather(dist, 2, topk_idx)[valid]
+    valid_edges = (target_global != -1) & (source_global != -1) & torch.isfinite(dist_topk)
     return torch.stack([source_global[valid_edges], target_global[valid_edges]], dim=0)
 
 def evaluate(model, val_loader, device):

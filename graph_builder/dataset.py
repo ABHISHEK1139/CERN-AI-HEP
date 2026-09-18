@@ -68,7 +68,7 @@ class CollisionEventDataset(InMemoryDataset):
                 torch.save((self._data, self.slices), self.processed_paths[0])
             else:
                 raise FileNotFoundError(
-                    f"No graphs found. Run graph_constructor first, or provide graphs list."
+                    "No graphs found. Run graph_constructor first, or provide graphs list."
                 )
 
     @property
@@ -122,6 +122,8 @@ class CollisionEventDataset(InMemoryDataset):
     def index_select(self, indices: List[int]) -> "CollisionEventDataset":
         """Select subset by indices, returning a new dataset."""
         graphs = [self.get(i) for i in indices]
+        if not graphs:
+            raise ValueError("index_select received empty indices.")
         subset = CollisionEventDataset.__new__(CollisionEventDataset)
         # Preserve InMemoryDataset internals so collate()/get() keep working.
         subset.transform = self.transform
