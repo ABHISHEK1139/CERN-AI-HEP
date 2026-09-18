@@ -73,10 +73,11 @@ Below are representative event visualizations of collision graphs reconstructed 
                              • Streamlit Interactive Dashboard
 ```
 
-<div align="center">
-  <img src="docs/architecture.png" width="750" alt="CERN-AI-HEP Pipeline Architecture">
-  <p><em>Figure 1: Full end-to-end relational deep learning pipeline for LHC collision events.</em></p>
-</div>
+<p align="center">
+  <img src="docs/architecture.png" width="100%" alt="CERN-AI-HEP Pipeline Architecture">
+  <br>
+  <em>Figure 1: Full end-to-end relational deep learning pipeline for LHC collision events.</em>
+</p>
 
 ---
 
