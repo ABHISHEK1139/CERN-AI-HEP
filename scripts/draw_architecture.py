@@ -164,9 +164,10 @@ def draw_diagram():
 
     plt.subplots_adjust(left=0.01, right=0.99, top=0.98, bottom=0.02)
     Path("docs").mkdir(parents=True, exist_ok=True)
+    plt.savefig("docs/pipeline_architecture.png", dpi=200, facecolor=fig.get_facecolor(), bbox_inches='tight')
     plt.savefig("docs/architecture.png", dpi=200, facecolor=fig.get_facecolor(), bbox_inches='tight')
     plt.close()
-    print("Regenerated docs/architecture.png with modern 16:9 layout.")
+    print("Regenerated docs/pipeline_architecture.png and docs/architecture.png with modern 16:9 layout.")
 
 if __name__ == "__main__":
     draw_diagram()
