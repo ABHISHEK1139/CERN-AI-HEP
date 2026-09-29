@@ -1,6 +1,7 @@
 """Trim uniform borders from docs PNGs (explicit opt-in, never on import)."""
-from PIL import Image, ImageChops
 import glob
+
+from PIL import Image, ImageChops
 
 
 def trim(im, *, dark_background=False):

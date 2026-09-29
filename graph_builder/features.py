@@ -9,11 +9,11 @@ Handles:
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
-from event_ingestion.config import NUM_PARTICLE_TYPES, PARTICLE_FEATURES
+from event_ingestion.config import NUM_PARTICLE_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class FeatureExtractor:
         self._std = None
 
     def particle_to_node_features(
-        self, particle: Dict[str, Any]
+        self, particle: dict[str, Any]
     ) -> np.ndarray:
         """
         Convert a particle dict to a node feature vector.
@@ -94,8 +94,8 @@ class FeatureExtractor:
 
     def compute_edge_features(
         self,
-        node_i: Dict[str, Any],
-        node_j: Dict[str, Any],
+        node_i: dict[str, Any],
+        node_j: dict[str, Any],
     ) -> np.ndarray:
         """
         Compute edge features between two particles.
@@ -113,8 +113,8 @@ class FeatureExtractor:
         eta_j = node_j.get("eta", 0.0)
         phi_i = node_i.get("phi", 0.0)
         phi_j = node_j.get("phi", 0.0)
-        pt_i = node_i.get("pt", None)
-        pt_j = node_j.get("pt", None)
+        pt_i = node_i.get("pt")
+        pt_j = node_j.get("pt")
         if pt_i is None or pt_j is None:
             raise KeyError("compute_edge_features requires 'pt' in both particles.")
 
@@ -140,7 +140,7 @@ class FeatureExtractor:
         return float(dphi)
 
     def extract_event_features(
-        self, particles: List[Dict[str, Any]]
+        self, particles: list[dict[str, Any]]
     ) -> np.ndarray:
         """
         Extract node feature matrix for all particles in an event.
@@ -192,7 +192,7 @@ class FeatureExtractor:
         return features
 
     def compute_delta_r_matrix(
-        self, particles: List[Dict[str, Any]]
+        self, particles: list[dict[str, Any]]
     ) -> np.ndarray:
         """
         Compute pairwise ΔR distance matrix.
@@ -203,7 +203,6 @@ class FeatureExtractor:
         Returns:
             Distance matrix of shape (n, n).
         """
-        n = len(particles)
         eta = np.array([p.get("eta", 0.0) for p in particles])
         phi = np.array([p.get("phi", 0.0) for p in particles])
 
@@ -214,5 +213,4 @@ class FeatureExtractor:
         # Wrap Δφ
         d_phi = np.mod(d_phi + np.pi, 2 * np.pi) - np.pi
 
-        delta_r = np.sqrt(d_eta**2 + d_phi**2)
-        return delta_r
+        return np.sqrt(d_eta**2 + d_phi**2)

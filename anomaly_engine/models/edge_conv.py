@@ -13,6 +13,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import EdgeConv, global_mean_pool, global_max_pool
 
+from anomaly_engine.models.norm import SafeBatchNorm1d, apply_norm, resolve_norm
+
 
 class EdgeConvEncoder(nn.Module):
     """
@@ -31,46 +33,57 @@ class EdgeConvEncoder(nn.Module):
         latent_dim: int = 32,
         num_layers: int = 3,
         dropout: float = 0.1,
+        norm: str = "batch",
         **kwargs,
     ):
+        """
+        Args:
+            input_dim: Number of node features.
+            hidden_dim: Width of hidden layers.
+            latent_dim: Width of the output latent space.
+            num_layers: Number of EdgeConv message-passing layers (>= 2).
+            dropout: Dropout probability applied between layers.
+            norm: 'batch' (default), 'layer', or 'none'. 'batch' uses
+                :class:`SafeBatchNorm1d`, which matters here because the norms
+                inside the EdgeConv MLPs normalize over the *edge* axis — a
+                2-particle event yields a single edge and plain BatchNorm
+                raises on it.
+        """
         super().__init__()
+        if num_layers < 2:
+            raise ValueError(f"num_layers must be >= 2 (input + output layer), got {num_layers}.")
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
+
+        def _make_mlp(in_dim: int, out_dim: int) -> nn.Sequential:
+            layers = [nn.Linear(in_dim, hidden_dim), nn.ReLU()]
+            if norm in ("batch", "batchnorm", "bn"):
+                layers.append(SafeBatchNorm1d(hidden_dim))
+            elif norm in ("layer", "layernorm", "ln"):
+                layers.append(nn.LayerNorm(hidden_dim))
+            elif norm not in ("none", "identity", "off"):
+                raise ValueError(
+                    f"Unknown norm '{norm}'. Expected one of: 'batch', 'layer', 'none'."
+                )
+            layers.append(nn.Linear(hidden_dim, out_dim))
+            return nn.Sequential(*layers)
 
         self.convs = nn.ModuleList()
         self.norms = nn.ModuleList()
 
         # First layer MLP for EdgeConv
-        mlp1 = nn.Sequential(
-            nn.Linear(2 * input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.BatchNorm1d(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim)
-        )
-        self.convs.append(EdgeConv(nn=mlp1, aggr='mean'))
-        self.norms.append(nn.BatchNorm1d(hidden_dim))
+        self.convs.append(EdgeConv(nn=_make_mlp(2 * input_dim, hidden_dim), aggr='mean'))
+        self.norms.append(resolve_norm(hidden_dim, norm))
 
         # Hidden layers
         for _ in range(max(num_layers - 2, 0)):
-            mlp_hidden = nn.Sequential(
-                nn.Linear(2 * hidden_dim, hidden_dim),
-                nn.ReLU(),
-                nn.BatchNorm1d(hidden_dim),
-                nn.Linear(hidden_dim, hidden_dim)
-            )
-            self.convs.append(EdgeConv(nn=mlp_hidden, aggr='mean'))
-            self.norms.append(nn.BatchNorm1d(hidden_dim))
+            self.convs.append(EdgeConv(nn=_make_mlp(2 * hidden_dim, hidden_dim), aggr='mean'))
+            self.norms.append(resolve_norm(hidden_dim, norm))
 
         # Output layer
-        mlp_out = nn.Sequential(
-            nn.Linear(2 * hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.BatchNorm1d(hidden_dim),
-            nn.Linear(hidden_dim, latent_dim)
-        )
-        self.convs.append(EdgeConv(nn=mlp_out, aggr='mean'))
-        self.norms.append(nn.BatchNorm1d(latent_dim))
+        self.convs.append(EdgeConv(nn=_make_mlp(2 * hidden_dim, latent_dim), aggr='mean'))
+        self.norms.append(resolve_norm(latent_dim, norm))
 
         self.dropout = dropout
 
@@ -88,9 +101,7 @@ class EdgeConvEncoder(nn.Module):
         """
         for i, (conv, norm) in enumerate(zip(self.convs, self.norms)):
             x = conv(x, edge_index)
-            # BatchNorm needs >1 sample in train mode; skip it for degenerate batches.
-            # (Graphs with <2 particles are filtered upstream; this guards batch_size=1.)
-            x = norm(x) if x.size(0) > 1 else x
+            x = apply_norm(norm, x)
             if i < len(self.convs) - 1:
                 x = F.relu(x)
                 x = F.dropout(x, p=self.dropout, training=self.training)

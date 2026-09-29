@@ -18,16 +18,16 @@ Labels: 10-class jet origin (QCD, Hbb, Hcc, Hgg, H4q, Hqql, Zqq, Wqq, Tbqq, Tbl)
 For anomaly detection we treat QCD as background (label=0) and everything else as signal (label=1).
 """
 
+import hashlib
 import logging
-from pathlib import Path
-from typing import List, Optional, Tuple
 
+import awkward as ak
 import numpy as np
 import torch
 import uproot
-import awkward as ak
 from torch_geometric.data import Data, InMemoryDataset
-from torch_geometric.loader import DataLoader
+
+from graph_builder.splitting import SplittableDatasetMixin
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ LABEL_BRANCHES = [
 ]
 
 
-class JetClassDataset(InMemoryDataset):
+class JetClassDataset(SplittableDatasetMixin, InMemoryDataset):
     """
     PyTorch Geometric dataset for JetClass particle clouds.
 
@@ -63,12 +63,12 @@ class JetClassDataset(InMemoryDataset):
     def __init__(
         self,
         root: str,
-        root_file_paths: List[str],
+        root_file_paths: list[str],
         k_neighbors: int = 8,
         max_particles: int = 128,
         transform=None,
         pre_transform=None,
-        sample_size: Optional[int] = None,
+        sample_size: int | None = None,
         tag: str = "default",
     ):
         """
@@ -79,8 +79,23 @@ class JetClassDataset(InMemoryDataset):
             max_particles: Maximum particles per jet (zero-padded jets trimmed).
             sample_size: Number of jets to sample (None for all).
             tag: A tag string to differentiate processed file names.
+
+        Raises:
+            ValueError: If ``root_file_paths`` is empty. Processing would
+                otherwise fail deep inside awkward with an opaque error.
         """
-        self.root_file_paths = root_file_paths
+        if not root_file_paths:
+            raise ValueError(
+                "JetClassDataset needs at least one ROOT file. Found none in "
+                "the requested paths; download JetClass first (see README)."
+            )
+        if k_neighbors < 1:
+            raise ValueError(f"k_neighbors must be >= 1, got {k_neighbors}.")
+        if max_particles < 2:
+            raise ValueError(
+                f"max_particles must be >= 2 to form kNN edges, got {max_particles}."
+            )
+        self.root_file_paths = list(root_file_paths)
         self.k_neighbors = k_neighbors
         self.max_particles = max_particles
         self.sample_size = sample_size
@@ -89,8 +104,6 @@ class JetClassDataset(InMemoryDataset):
         # Include k/max_particles AND a hash of the source file list in the cache
         # key: reusing a k=8 cache for a k=16 ablation (or a different file set
         # under the same tag) silently invalidates the experiment.
-        import hashlib
-
         files_key = hashlib.md5(
             "|".join(sorted(str(f) for f in root_file_paths)).encode()
         ).hexdigest()[:8]
@@ -142,8 +155,7 @@ class JetClassDataset(InMemoryDataset):
         source = torch.arange(n).unsqueeze(1).expand(-1, k).reshape(-1)
         target = indices.reshape(-1)
 
-        edge_index = torch.stack([source, target], dim=0).cpu()
-        return edge_index
+        return torch.stack([source, target], dim=0).cpu()
 
     def process(self):
         logger.info(f"Processing JetClass data from {len(self.root_file_paths)} file(s)...")
@@ -254,69 +266,3 @@ class JetClassDataset(InMemoryDataset):
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
         logger.info(f"Saved {len(data_list)} jet graphs to {self.processed_paths[0]}")
-
-    def get_splits(
-        self,
-        train_ratio: float = 0.7,
-        val_ratio: float = 0.15,
-        test_ratio: float = 0.15,
-        seed: int = 42,
-    ) -> Tuple["JetClassDataset", "JetClassDataset", "JetClassDataset"]:
-        assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
-
-        n = len(self)
-        indices = np.random.RandomState(seed).permutation(n)
-
-        n_train = int(n * train_ratio)
-        n_val = int(n * val_ratio)
-
-        train_idx = indices[:n_train]
-        val_idx = indices[n_train : n_train + n_val]
-        test_idx = indices[n_train + n_val :]
-
-        return (
-            self.index_select(train_idx.tolist()),
-            self.index_select(val_idx.tolist()),
-            self.index_select(test_idx.tolist()),
-        )
-
-    def index_select(self, indices: List[int]) -> "JetClassDataset":
-        graphs = [self.get(i) for i in indices]
-        if not graphs:
-            raise ValueError("index_select received empty indices.")
-        subset = JetClassDataset.__new__(JetClassDataset)
-        subset.transform = self.transform
-        subset.pre_transform = self.pre_transform
-        subset._indices = None
-        try:
-            subset.data, subset.slices = self.collate(graphs)
-        except TypeError:
-            subset.data, subset.slices = JetClassDataset.collate(graphs)
-        subset._data_list = None
-        return subset
-
-    def get_loaders(
-        self,
-        batch_size: int = 256,
-        train_ratio: float = 0.7,
-        val_ratio: float = 0.15,
-        test_ratio: float = 0.15,
-        seed: int = 42,
-        num_workers: int = 0,
-    ) -> Tuple[DataLoader, DataLoader, DataLoader]:
-        train_ds, val_ds, test_ds = self.get_splits(
-            train_ratio, val_ratio, test_ratio, seed
-        )
-        for _name, _ds in (("train", train_ds), ("val", val_ds), ("test", test_ds)):
-            if len(_ds) == 0:
-                logger.warning(
-                    f"Empty {_name} split from {len(self)} jets "
-                    f"(ratios {train_ratio}/{val_ratio}/{test_ratio})."
-                )
-
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-
-        logger.info(f"JetClass DataLoaders: train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}")
-        return train_loader, val_loader, test_loader

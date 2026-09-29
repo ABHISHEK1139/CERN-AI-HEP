@@ -1,17 +1,29 @@
+"""
+PyTorch Geometric dataset for the LHCO 2020 Anomaly Detection Dataset.
+
+Reads the features.h5 file, where each event has 2 jets and a label.
+Each jet has 7 features: px, py, pz, m, tau1, tau2, tau3.
+Constructs a 2-node graph for each event.
+"""
+
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple
 
-import numpy as np
 import pandas as pd
 import torch
 from torch_geometric.data import Data, InMemoryDataset
-from torch_geometric.loader import DataLoader
+
+from graph_builder.splitting import SplittableDatasetMixin
 
 logger = logging.getLogger(__name__)
 
+# Jet 1 / Jet 2 feature columns, in node-feature order.
+LHCO_J1_COLS = ['pxj1', 'pyj1', 'pzj1', 'mj1', 'tau1j1', 'tau2j1', 'tau3j1']
+LHCO_J2_COLS = ['pxj2', 'pyj2', 'pzj2', 'mj2', 'tau1j2', 'tau2j2', 'tau3j2']
+LHCO_INPUT_DIM = len(LHCO_J1_COLS)
 
-class LHCODataset(InMemoryDataset):
+
+class LHCODataset(SplittableDatasetMixin, InMemoryDataset):
     """
     PyTorch Geometric dataset for the LHCO 2020 Anomaly Detection Dataset.
 
@@ -26,8 +38,19 @@ class LHCODataset(InMemoryDataset):
         h5_path: str = "data/lhco/events_anomalydetection_v2.features.h5",
         transform=None,
         pre_transform=None,
-        sample_size: Optional[int] = None,
+        sample_size: int | None = None,
     ):
+        """
+        Args:
+            root: Directory where processed graphs are stored.
+            h5_path: Path to the LHCO features HDF5 file.
+            sample_size: Optional stratified subsample size.
+
+        Raises:
+            ValueError: If ``sample_size`` is not a positive int.
+        """
+        if sample_size is not None and sample_size < 1:
+            raise ValueError(f"sample_size must be >= 1, got {sample_size}.")
         self.h5_path = h5_path
         self.sample_size = sample_size
         super().__init__(root, transform, pre_transform)
@@ -58,8 +81,15 @@ class LHCODataset(InMemoryDataset):
                 f"LHCO H5 not found: {self.h5_path}. "
                 "Download events_anomalydetection_v2.features.h5 first (see README)."
             )
-        logger.info(f"Loading data from {self.h5_path}...")
+        logger.info("Loading data from %s...", self.h5_path)
         df = pd.read_hdf(self.h5_path)
+
+        missing = [c for c in LHCO_J1_COLS + LHCO_J2_COLS + ['label'] if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"{self.h5_path} is missing expected LHCO columns: {missing}. "
+                f"Available: {list(df.columns)[:20]}..."
+            )
 
         if self.sample_size is not None and self.sample_size < len(df):
             # Take a stratified sample to preserve signal/bg ratio
@@ -78,14 +108,10 @@ class LHCODataset(InMemoryDataset):
                 df_sig.sample(n=n_sig, random_state=42) if n_sig > 0 else df_sig.iloc[0:0],
             ]).sample(frac=1.0, random_state=42)  # shuffle
 
-        logger.info(f"Building graphs for {len(df)} events...")
-        
-        # Columns: pxj1, pyj1, pzj1, mj1, tau1j1, tau2j1, tau3j1 (same for j2), label
-        j1_cols = ['pxj1', 'pyj1', 'pzj1', 'mj1', 'tau1j1', 'tau2j1', 'tau3j1']
-        j2_cols = ['pxj2', 'pyj2', 'pzj2', 'mj2', 'tau1j2', 'tau2j2', 'tau3j2']
-        
-        node_features_j1 = torch.tensor(df[j1_cols].values, dtype=torch.float)
-        node_features_j2 = torch.tensor(df[j2_cols].values, dtype=torch.float)
+        logger.info("Building graphs for %d events...", len(df))
+
+        node_features_j1 = torch.tensor(df[LHCO_J1_COLS].values, dtype=torch.float)
+        node_features_j2 = torch.tensor(df[LHCO_J2_COLS].values, dtype=torch.float)
         labels = torch.tensor(df['label'].values, dtype=torch.long)
 
         data_list = []
@@ -113,69 +139,3 @@ class LHCODataset(InMemoryDataset):
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
         logger.info("LHCO graphs processing complete.")
-
-    def get_splits(
-        self,
-        train_ratio: float = 0.7,
-        val_ratio: float = 0.15,
-        test_ratio: float = 0.15,
-        seed: int = 42,
-    ) -> Tuple["LHCODataset", "LHCODataset", "LHCODataset"]:
-        assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
-
-        n = len(self)
-        indices = np.random.RandomState(seed).permutation(n)
-
-        n_train = int(n * train_ratio)
-        n_val = int(n * val_ratio)
-
-        train_idx = indices[:n_train]
-        val_idx = indices[n_train : n_train + n_val]
-        test_idx = indices[n_train + n_val :]
-
-        return (
-            self.index_select(train_idx.tolist()),
-            self.index_select(val_idx.tolist()),
-            self.index_select(test_idx.tolist()),
-        )
-
-    def index_select(self, indices: List[int]) -> "LHCODataset":
-        graphs = [self.get(i) for i in indices]
-        if not graphs:
-            raise ValueError("index_select received empty indices.")
-        subset = LHCODataset.__new__(LHCODataset)
-        subset.transform = self.transform
-        subset.pre_transform = self.pre_transform
-        subset._indices = None
-        try:
-            subset.data, subset.slices = self.collate(graphs)
-        except TypeError:
-            subset.data, subset.slices = LHCODataset.collate(graphs)
-        subset._data_list = None
-        return subset
-
-    def get_loaders(
-        self,
-        batch_size: int = 256,
-        train_ratio: float = 0.7,
-        val_ratio: float = 0.15,
-        test_ratio: float = 0.15,
-        seed: int = 42,
-        num_workers: int = 0,
-    ) -> Tuple[DataLoader, DataLoader, DataLoader]:
-        train_ds, val_ds, test_ds = self.get_splits(
-            train_ratio, val_ratio, test_ratio, seed
-        )
-        for _name, _ds in (("train", train_ds), ("val", val_ds), ("test", test_ds)):
-            if len(_ds) == 0:
-                logger.warning(
-                    f"Empty {_name} split from {len(self)} events "
-                    f"(ratios {train_ratio}/{val_ratio}/{test_ratio})."
-                )
-
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-
-        logger.info(f"LHCO DataLoaders: train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}")
-        return train_loader, val_loader, test_loader

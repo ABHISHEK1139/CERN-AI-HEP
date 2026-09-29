@@ -1,21 +1,28 @@
+"""
+PyTorch Geometric dataset for CMS Open Data (NanoAOD).
+
+Reads standard ROOT files using uproot and builds a 2-jet graph per event with
+node features [pt, eta, phi, mass].
+"""
+
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple
 
+import awkward as ak
 import numpy as np
 import torch
 import uproot
-import awkward as ak
 from torch_geometric.data import Data, InMemoryDataset
-from torch_geometric.loader import DataLoader
+
+from graph_builder.splitting import SplittableDatasetMixin
 
 logger = logging.getLogger(__name__)
 
 
-class CMSDataset(InMemoryDataset):
+class CMSDataset(SplittableDatasetMixin, InMemoryDataset):
     """
     PyTorch Geometric dataset for CMS Open Data (NanoAOD).
-    
+
     Reads standard ROOT files using uproot.
     Builds graphs from the leading 2 Jets.
     Features: pt, eta, phi, mass.
@@ -28,7 +35,7 @@ class CMSDataset(InMemoryDataset):
         label: int,
         transform=None,
         pre_transform=None,
-        sample_size: Optional[int] = None,
+        sample_size: int | None = None,
     ):
         """
         Args:
@@ -36,7 +43,17 @@ class CMSDataset(InMemoryDataset):
             root_file_path: Path to the CMS NanoAOD .root file.
             label: Label to assign to all events in this file (e.g. 0 for background, 1 for anomaly).
             sample_size: Number of events to sample (None for all).
+
+        Raises:
+            ValueError: If ``label`` is not 0 or 1, or ``sample_size`` < 1.
         """
+        if label not in (0, 1):
+            raise ValueError(
+                f"label must be 0 (background) or 1 (anomaly), got {label!r}."
+            )
+        if sample_size is not None and sample_size < 1:
+            raise ValueError(f"sample_size must be >= 1, got {sample_size}.")
+
         self.root_file_path = root_file_path
         self.label = label
         self.sample_size = sample_size
@@ -89,30 +106,27 @@ class CMSDataset(InMemoryDataset):
             # Read only required branches to save memory
             branches = ["Jet_pt", "Jet_eta", "Jet_phi", "Jet_mass"]
             arrays = tree.arrays(branches)
-        
+
         # Convert to awkward arrays
         pt = arrays["Jet_pt"]
         eta = arrays["Jet_eta"]
         phi = arrays["Jet_phi"]
         mass = arrays["Jet_mass"]
-        
+
         # Filter: We only want events that have at least 2 jets
         mask = ak.num(pt) >= 2
         pt = pt[mask]
         eta = eta[mask]
         phi = phi[mask]
         mass = mass[mask]
-        
+
         logger.info(f"Filtered to {len(pt)} events with >= 2 jets.")
         if len(pt) == 0:
             raise ValueError(
                 f"No events with >= 2 jets in {self.root_file_path}."
             )
 
-        if self.sample_size is not None:
-            if self.sample_size < 1:
-                raise ValueError(f"sample_size must be >= 1, got {self.sample_size}.")
-            if self.sample_size < len(pt):
+        if self.sample_size is not None and self.sample_size < len(pt):
                 # Since awkward arrays don't have a direct random sample, we do it via numpy indices
                 # (isolated RNG: do not pollute global np.random state)
                 rng = np.random.RandomState(42)
@@ -172,69 +186,3 @@ class CMSDataset(InMemoryDataset):
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
         logger.info(f"Saved {len(data_list)} graphs to {self.processed_paths[0]}")
-
-    def get_splits(
-        self,
-        train_ratio: float = 0.7,
-        val_ratio: float = 0.15,
-        test_ratio: float = 0.15,
-        seed: int = 42,
-    ) -> Tuple["CMSDataset", "CMSDataset", "CMSDataset"]:
-        assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
-
-        n = len(self)
-        indices = np.random.RandomState(seed).permutation(n)
-
-        n_train = int(n * train_ratio)
-        n_val = int(n * val_ratio)
-
-        train_idx = indices[:n_train]
-        val_idx = indices[n_train : n_train + n_val]
-        test_idx = indices[n_train + n_val :]
-
-        return (
-            self.index_select(train_idx.tolist()),
-            self.index_select(val_idx.tolist()),
-            self.index_select(test_idx.tolist()),
-        )
-
-    def index_select(self, indices: List[int]) -> "CMSDataset":
-        graphs = [self.get(i) for i in indices]
-        if not graphs:
-            raise ValueError("index_select received empty indices.")
-        subset = CMSDataset.__new__(CMSDataset)
-        subset.transform = self.transform
-        subset.pre_transform = self.pre_transform
-        subset._indices = None
-        try:
-            subset.data, subset.slices = self.collate(graphs)
-        except TypeError:
-            subset.data, subset.slices = CMSDataset.collate(graphs)
-        subset._data_list = None
-        return subset
-
-    def get_loaders(
-        self,
-        batch_size: int = 256,
-        train_ratio: float = 0.7,
-        val_ratio: float = 0.15,
-        test_ratio: float = 0.15,
-        seed: int = 42,
-        num_workers: int = 0,
-    ) -> Tuple[DataLoader, DataLoader, DataLoader]:
-        train_ds, val_ds, test_ds = self.get_splits(
-            train_ratio, val_ratio, test_ratio, seed
-        )
-        for _name, _ds in (("train", train_ds), ("val", val_ds), ("test", test_ds)):
-            if len(_ds) == 0:
-                logger.warning(
-                    f"Empty {_name} split from {len(self)} events "
-                    f"(ratios {train_ratio}/{val_ratio}/{test_ratio})."
-                )
-
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-
-        logger.info(f"CMS DataLoaders: train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}")
-        return train_loader, val_loader, test_loader

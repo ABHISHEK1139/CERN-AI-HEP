@@ -15,7 +15,7 @@ CLI:
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import numpy as np
 import torch
@@ -36,7 +36,7 @@ class EventGraphConstructor:
         k: int = 8,
         delta_r_threshold: float = 1.5,
         include_edge_features: bool = True,
-        config: Optional[EventConfig] = None,
+        config: EventConfig | None = None,
     ):
         """
         Args:
@@ -59,8 +59,8 @@ class EventGraphConstructor:
         self.feature_extractor = FeatureExtractor()
 
     def event_to_graph(
-        self, event: Dict[str, Any], label: Optional[int] = None
-    ) -> Optional[Data]:
+        self, event: dict[str, Any], label: int | None = None
+    ) -> Data | None:
         """
         Convert a single event to a PyTorch Geometric Data object.
 
@@ -140,7 +140,7 @@ class EventGraphConstructor:
         return data
 
     def _build_knn_edges(
-        self, particles: List[Dict[str, Any]], k: int
+        self, particles: list[dict[str, Any]], k: int
     ) -> np.ndarray:
         """Build k-nearest neighbor edges in η-φ space."""
         delta_r_matrix = self.feature_extractor.compute_delta_r_matrix(particles)
@@ -161,10 +161,12 @@ class EventGraphConstructor:
                 dst.append(i)
 
         # Remove duplicates (sorted for deterministic edge order across runs)
-        edges = sorted(set(zip(src, dst)))
+        # strict=True: src and dst are appended in lockstep above, so a
+        # length mismatch means a logic bug, not a ragged input.
+        edges = sorted(set(zip(src, dst, strict=True)))
         if edges:
-            src, dst = zip(*edges)
-            return np.array([list(src), list(dst)])
+            edge_src, edge_dst = zip(*edges, strict=True)
+            return np.array([list(edge_src), list(edge_dst)])
         return np.zeros((2, 0), dtype=np.int64)
 
     def _build_fully_connected_edges(self, n: int) -> np.ndarray:
@@ -178,7 +180,7 @@ class EventGraphConstructor:
         return np.array([src, dst])
 
     def _build_delta_r_edges(
-        self, particles: List[Dict[str, Any]], threshold: float
+        self, particles: list[dict[str, Any]], threshold: float
     ) -> np.ndarray:
         """Build edges between particles within ΔR threshold."""
         delta_r_matrix = self.feature_extractor.compute_delta_r_matrix(particles)
@@ -198,9 +200,9 @@ class EventGraphConstructor:
 
     def convert_dataset(
         self,
-        events: List[Dict[str, Any]],
-        labels: Optional[np.ndarray] = None,
-    ) -> List:
+        events: list[dict[str, Any]],
+        labels: np.ndarray | None = None,
+    ) -> list:
         """
         Convert a list of events to a list of PyG Data objects.
 
@@ -235,10 +237,10 @@ class EventGraphConstructor:
 
     def save_dataset(
         self,
-        events: List[Dict[str, Any]],
-        labels: Optional[np.ndarray] = None,
-        output_dir: Union[str, Path] = ".",
-    ) -> List[Data]:
+        events: list[dict[str, Any]],
+        labels: np.ndarray | None = None,
+        output_dir: str | Path = ".",
+    ) -> list[Data]:
         """
         Convert events and save synchronized graphs.pt and labels.pt to output_dir.
 

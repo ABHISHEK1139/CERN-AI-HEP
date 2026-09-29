@@ -8,8 +8,8 @@ Modules:
     evaluate        — Metrics, ROC curves, latent space visualization
 """
 
-from anomaly_engine.trainer import Trainer
 from anomaly_engine.anomaly_scorer import AnomalyScorer
 from anomaly_engine.evaluate import Evaluator
+from anomaly_engine.trainer import Trainer
 
-__all__ = ["Trainer", "AnomalyScorer", "Evaluator"]
+__all__ = ["AnomalyScorer", "Evaluator", "Trainer"]

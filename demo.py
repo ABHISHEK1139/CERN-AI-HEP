@@ -1,22 +1,34 @@
-import streamlit as st
 import os
-import torch
-import numpy as np
+import sys
+from glob import glob
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import networkx as nx
-from glob import glob
+import numpy as np
 import pandas as pd
+import streamlit as st
+import torch
 
-import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from graph_builder.jetclass_dataset import JetClassDataset
 except ImportError:  # optional heavy dep (uproot/awkward) may be absent
     JetClassDataset = None
-from anomaly_engine.models.edge_conv import EdgeConvEncoder
-from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
 from torch_geometric.data import Batch
+
+from anomaly_engine.checkpoint import load_state_dict
+from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
+from anomaly_engine.models.edge_conv import EdgeConvEncoder
+
+DEFAULT_CKPT = "checkpoints/jetclass_autoencoder/jetclass_edgeconv_best.pt"
+
+# JetClass 16-feature layout: px=0, py=1, pz=2, energy=3, deta=4, dphi=5,
+# ..., charge=10.
+JET_PX, JET_PY, JET_ENERGY, JET_DETA, JET_DPHI, JET_CHARGE = 0, 1, 3, 4, 5, 10
+JETCLASS_INPUT_DIM = 16
+
 
 # Set page config (only when actually running under `streamlit run`)
 def _streamlit_runtime_exists() -> bool:
@@ -35,25 +47,42 @@ if _IN_STREAMLIT_RUNTIME:
 
     st.title("CERN AI: GNN Anomaly Detection Research Platform")
     st.markdown("""
-This interactive research platform demonstrates an unsupervised anomaly detection pipeline on **3D Particle Clouds** representing collision jets at the LHC. 
+This interactive research platform demonstrates an unsupervised anomaly detection pipeline on **3D Particle Clouds** representing collision jets at the LHC.
 It uses a pre-trained **EdgeConv Graph Autoencoder** to rank unusual jet topologies by learning the geometry of Standard Model background-like events.
 """)
 
 # Load Model (uncached core; cached alias only inside the Streamlit runtime,
 # where st.cache_resource requires a runtime context to be called).
-def _load_model_uncached(ckpt_path="checkpoints/jetclass_autoencoder/jetclass_edgeconv_best.pt"):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    input_dim, hidden_dim, latent_dim = 16, 64, 32
-    encoder = EdgeConvEncoder(input_dim=input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim, num_layers=3)
-    decoder = GraphDecoder(latent_dim=latent_dim, hidden_dim=hidden_dim, output_dim=input_dim)
-    model = GraphAutoencoder(encoder=encoder, decoder=decoder).to(device)
+def _build_model(input_dim=JETCLASS_INPUT_DIM, hidden_dim=64, latent_dim=32):
+    """Instantiate the demo architecture. Shape-only, no weights loaded."""
+    encoder = EdgeConvEncoder(input_dim=input_dim, hidden_dim=hidden_dim,
+                              latent_dim=latent_dim, num_layers=3)
+    decoder = GraphDecoder(latent_dim=latent_dim, hidden_dim=hidden_dim,
+                           output_dim=input_dim)
+    return GraphAutoencoder(encoder=encoder, decoder=decoder)
 
-    if os.path.exists(ckpt_path):
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-        if "model_state_dict" not in ckpt:
-            raise KeyError(f"{ckpt_path} has no 'model_state_dict'.")
-        model.load_state_dict(ckpt["model_state_dict"])
-    model.eval()
+
+def _load_model_uncached(ckpt_path=DEFAULT_CKPT):
+    """Load the trained EdgeConv autoencoder.
+
+    Raises:
+        FileNotFoundError: If the checkpoint is missing. The previous version
+            silently fell through to a randomly initialised model and then
+            displayed its reconstruction errors as "Anomaly Score", which is
+            scientifically meaningless output presented with full confidence.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = _build_model().to(device)
+
+    path = Path(ckpt_path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Checkpoint not found: {path}. Train it first with\n"
+            f"    python experiments/train_jetclass.py --arch edgeconv --large\n"
+            f"or pass --checkpoint. Refusing to score jets with an untrained "
+            f"(randomly initialised) model."
+        )
+    load_state_dict(path, model, device=device)
     return model, device
 
 
@@ -61,6 +90,11 @@ if _IN_STREAMLIT_RUNTIME:
     load_model = st.cache_resource(_load_model_uncached)
 else:
     load_model = _load_model_uncached
+
+
+def count_parameters(model) -> int:
+    """Number of trainable parameters (the sidebar used a stale hardcoded 37,296)."""
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 def _get_model():
@@ -84,16 +118,22 @@ except Exception:
 # ================= SIDEBAR =================
 if _IN_STREAMLIT_RUNTIME:
     with st.sidebar.expander("Training Statistics Card", expanded=True):
-        st.markdown("""
-        **Architecture:** EdgeConv Graph Autoencoder  
-        **Parameters:** 37,296  
-        **Graph Construction:** k-NN (k=8)  
-        **Training Dataset:** JetClass (SM Background)  
-        **Training Jets:** 6,000,000  
-        **Validation Jets:** 1,000,000  
-        **Epochs:** 50  
-        **Best AUROC:** 0.6808  
+        _n_params = count_parameters(_build_model())
+        st.markdown(f"""
+        **Architecture:** EdgeConv Graph Autoencoder
+        **Parameters:** {_n_params:,}
+        **Graph Construction:** k-NN (k=8)
+        **Training Dataset:** JetClass (SM Background)
+        **Training Jets:** 6,000,000
+        **Validation Jets:** 1,000,000
+        **Epochs:** 50
+        **Best AUROC:** 0.6808
         """)
+        st.caption(
+            "Jet counts and AUROC are the historical values reported in the "
+            "README for the published run. Parameter count is computed from "
+            "the live architecture."
+        )
 
     st.sidebar.header("Platform Controls")
     comparison_mode = st.sidebar.checkbox("Side-by-Side Comparison Mode", value=False)
@@ -114,7 +154,8 @@ if _IN_STREAMLIT_RUNTIME:
         st.session_state.seed = 42
 
     if st.sidebar.button("Generate New Collision Event(s)"):
-        st.session_state.seed = np.random.randint(0, 100000)
+        # local Generator: np.random.randint reseeded the global legacy state.
+        st.session_state.seed = int(np.random.default_rng().integers(0, 100000))
 else:
     comparison_mode = False
     sample_type = "Standard Model Background (Z \u2192 \u03BD\u03BD)"
@@ -125,20 +166,22 @@ def _get_sample_jet_impl(stype, seed):
         return None
     val_bg_files = sorted(glob("data/jetclass/val_5M/ZJetsToNuNu_*.root"))
     val_sig_files = sorted(glob("data/jetclass/val_5M/HTo*.root"))
-    
+
     if stype == "bg":
-        if not val_bg_files: return None
+        if not val_bg_files:
+            return None
         ds = JetClassDataset(root="data/jetclass/graphs_demo", root_file_paths=[val_bg_files[0]], k_neighbors=8, sample_size=50, tag="demo_bg")
     else:
-        if not val_sig_files: return None
+        if not val_sig_files:
+            return None
         ds = JetClassDataset(root="data/jetclass/graphs_demo", root_file_paths=[val_sig_files[0]], k_neighbors=8, sample_size=50, tag="demo_sig")
-    
-    import random
-    random.seed(seed)
+
     if len(ds) == 0:
         return None
-    idx = random.randint(0, len(ds) - 1)
-    return ds[idx]
+    # Local RNG: the previous code called random.seed(), which reseeded the
+    # global module and perturbed every other stochastic call in the app.
+    rng = np.random.default_rng(int(seed))
+    return ds[int(rng.integers(0, len(ds)))]
 
 
 # Public helper used by both the Streamlit UI (cached) and tests (plain).
@@ -169,39 +212,83 @@ def run_inference(jet, _model=None, _device=None):
         node_mse = res['per_node_loss'].cpu().numpy()
     return score, node_mse
 
+def jet_observables(jet):
+    """Physics summary for one JetClass jet.
+
+    In JetClass, node 0 *is* the jet and nodes 1..N-1 are its constituents, so
+    the jet's own four-momentum is node 0's ``(px, py)``. The previous code
+    labelled ``sum(hypot(px_i, py_i))`` over all constituents as "Total Jet
+    pT", which is a sum of magnitudes, not a vector sum — it is systematically
+    larger than the true jet pT and is not a collider observable at all.
+
+    Returns:
+        dict with ``jet_pt``, ``sum_constituent_pt``, ``n_constituents`` and
+        ``avg_charge``.
+    """
+    x = jet.x
+    n = int(x.size(0))
+    if x.size(1) < 6:
+        raise ValueError(
+            f"Expected JetClass's 16-feature layout, got {x.size(1)} columns."
+        )
+
+    jet_pt = float(torch.hypot(x[0, JET_PX], x[0, JET_PY]).item())
+    constituents = x[1:] if n > 1 else x
+    sum_constituent_pt = float(
+        torch.hypot(constituents[:, JET_PX], constituents[:, JET_PY]).sum().item()
+    )
+    charge = constituents[:, JET_CHARGE] if x.size(1) > JET_CHARGE else None
+    return {
+        "jet_pt": jet_pt,
+        "sum_constituent_pt": sum_constituent_pt,
+        "n_constituents": int(constituents.size(0)),
+        "avg_charge": float(charge.mean().item()) if charge is not None else 0.0,
+    }
+
+
 def plot_error_heatmap(jet, node_mse):
     if getattr(jet, "edge_index", None) is None or jet.edge_index.numel() == 0:
         raise ValueError("plot_error_heatmap needs a jet with edges.")
     G = nx.Graph()
     edge_index = jet.edge_index.cpu().numpy()
     for i in range(edge_index.shape[1]):
-        G.add_edge(edge_index[0, i], edge_index[1, i])
+        G.add_edge(int(edge_index[0, i]), int(edge_index[1, i]))
+
+    n_nodes = int(jet.x.size(0))
+    # Use actual physics coordinates (eta, phi) for the node layout
+    pos = {i: (float(jet.x[i, JET_DETA]), float(jet.x[i, JET_DPHI])) for i in range(n_nodes)}
 
     # Scoped style: never leak dark_background into other figures.
     with plt.style.context('dark_background'):
         fig, ax = plt.subplots(figsize=(4, 3), dpi=150)
         fig.patch.set_facecolor('none')
         ax.set_facecolor('none')
-        
-        # Use actual physics coordinates (eta, phi) for the node layout
-        pos = {i: (jet.x[i, 4].item(), jet.x[i, 5].item()) for i in range(jet.x.size(0))}
-        
-        # Custom colormap visualization
-        sc = nx.draw_networkx_nodes(G, pos, node_size=30, node_color=node_mse, cmap=plt.cm.coolwarm, alpha=0.9, ax=ax, linewidths=0.5, edgecolors='white')
+
+        # NetworkX colours nodes of G, not all n_nodes. Isolated nodes (no
+        # edges) are absent from G, so pass exactly the nodes being drawn -
+        # otherwise a length mismatch between node_mse and len(G) is ambiguous.
+        draw_order = sorted(G.nodes())
+        color_values = [float(np.asarray(node_mse)[i]) for i in draw_order]
+
+        sc = nx.draw_networkx_nodes(
+            G, pos, nodelist=draw_order, node_size=30, node_color=color_values,
+            cmap=plt.cm.coolwarm, alpha=0.9, ax=ax, linewidths=0.5,
+            edgecolors='white',
+        )
         nx.draw_networkx_edges(G, pos, edge_color='#666666', alpha=0.4, ax=ax)
-        
+
         cbar = plt.colorbar(sc, ax=ax, shrink=0.7, pad=0.02)
         cbar.set_label("Reconstruction MSE", fontsize=8, color='lightgray')
         cbar.ax.tick_params(labelsize=7, colors='lightgray')
-        
+
         # Format axes to look like a physics plot
-        ax.set_xlabel("\u0394\u03B7 (Pseudo-rapidity)", fontsize=8, color='lightgray')
-        ax.set_ylabel("\u0394\u03C6 (Azimuthal)", fontsize=8, color='lightgray')
+        ax.set_xlabel("Δη (Pseudo-rapidity)", fontsize=8, color='lightgray')
+        ax.set_ylabel("Δφ (Azimuthal)", fontsize=8, color='lightgray')
         ax.tick_params(left=True, bottom=True, labelleft=True, labelbottom=True, labelsize=7, colors='lightgray')
         ax.grid(True, linestyle=':', alpha=0.3, color='gray')
         for spine in ax.spines.values():
             spine.set_color('#444444')
-            
+
         plt.tight_layout()
     return fig
 
@@ -209,33 +296,30 @@ def display_metrics(jet):
     if jet is None:
         st.warning("No jet available (demo data missing).")
         return
-    # JetClass cols: 0=px, 1=py, 10=charge. pT per particle = hypot(px, py).
-    px = jet.x[:, 0]
-    py = jet.x[:, 1] if jet.x.size(1) > 1 else torch.zeros_like(px)
-    pT = torch.hypot(px, py).sum().item()
-    n_const = jet.x.size(0)
-    avg_charge = jet.x[:, 10].mean().item()
-    
+    obs = jet_observables(jet)
+    n_const = obs["n_constituents"]
+
     edge_index = jet.edge_index.cpu().numpy()
     G = nx.Graph()
     for i in range(edge_index.shape[1]):
-        G.add_edge(edge_index[0, i], edge_index[1, i])
+        G.add_edge(int(edge_index[0, i]), int(edge_index[1, i]))
     n_edges = G.number_of_edges()
     avg_degree = (n_edges * 2) / n_const if n_const > 0 else 0
     density = (2 * n_edges) / (n_const * (n_const - 1)) if n_const > 1 else 0
     components = nx.number_connected_components(G)
-    
+
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("##### Physics")
         st.markdown("---")
-        st.metric("Total Jet pT (norm)", f"{pT:.2f}")
+        st.metric("Jet pT (GeV)", f"{obs['jet_pt']:.2f}")
+        st.metric("Σ Constituent pT (GeV)", f"{obs['sum_constituent_pt']:.2f}")
         st.metric("Constituents", f"{n_const}")
-        st.metric("Avg Charge", f"{avg_charge:.2f}")
+        st.metric("Avg Charge", f"{obs['avg_charge']:.2f}")
     with c2:
         st.markdown("##### Topology")
         st.markdown("---")
-        st.metric("Nodes", f"{n_const}")
+        st.metric("Nodes (incl. jet)", f"{int(jet.x.size(0))}")
         st.metric("Edges", f"{n_edges}")
         st.metric("Density", f"{density:.3f}")
         st.metric("Components", f"{components}")
@@ -246,16 +330,16 @@ def render_event_column(jet, title):
         st.error("Demo data missing: expected JetClass ROOT files under data/jetclass/val_5M/. "
                  "Run the smoke test or add demo data to enable interactive inference.")
         return None, None
-        
+
     score, node_mse = run_inference(jet)
     # Demo threshold is illustrative only, NOT calibrated on a held-out set.
     # Tune it in the sidebar; for research use AnomalyScorer.select_threshold
     # (percentile/sigma, see experiments/configs/*.yaml) on validation scores.
     threshold = st.session_state.get("demo_threshold", 235.0) if _IN_STREAMLIT_RUNTIME else 235.0
     is_anomaly = score > threshold
-    
+
     st.markdown(f"### {title}")
-    
+
     with st.container(border=True):
         st.markdown("#### Inference Result")
         c1, c2 = st.columns(2)
@@ -264,10 +348,10 @@ def render_event_column(jet, title):
             c2.error("Prediction: **ANOMALOUS**")
         else:
             c2.success("Prediction: **STANDARD MODEL**")
-            
+
     st.markdown("#### Reconstruction Error Heatmap")
     st.pyplot(plot_error_heatmap(jet, node_mse))
-    
+
     display_metrics(jet)
     return score, node_mse
 
@@ -306,23 +390,28 @@ if _IN_STREAMLIT_RUNTIME:
             st.markdown(f"#### Top 5 Anomalous Particles: {name}")
 
             # Sort node MSEs
-            top_indices = np.argsort(mse_data)[::-1][:5]
+            mse_arr = np.asarray(mse_data).flatten()
+            top_indices = np.argsort(mse_arr)[::-1][:5]
 
             table_data = []
             for idx in top_indices:
-                px = jet_data.x[idx, 0].item()
-                py = jet_data.x[idx, 1].item() if jet_data.x.size(1) > 1 else 0.0
+                if idx >= jet_data.x.size(0):
+                    continue
+                px = jet_data.x[idx, JET_PX].item()
+                py = jet_data.x[idx, JET_PY].item()
                 pt = float(np.hypot(px, py))
+                has_charge = jet_data.x.size(1) > JET_CHARGE
                 table_data.append({
-                    "Particle ID": idx,
-                    "Reconstruction Error (MSE)": f"{mse_data[idx]:.4f}",
+                    "Particle ID": int(idx),
+                    "Reconstruction Error (MSE)": f"{mse_arr[idx]:.4f}",
                     "pT (hypot px,py)": f"{pt:.4f}",
-                    "eta": f"{jet_data.x[idx, 4].item():.4f}",
-                    "phi": f"{jet_data.x[idx, 5].item():.4f}",
-                    "charge": f"{jet_data.x[idx, 10].item():.1f}"
+                    "eta": f"{jet_data.x[idx, JET_DETA].item():.4f}",
+                    "phi": f"{jet_data.x[idx, JET_DPHI].item():.4f}",
+                    "charge": f"{jet_data.x[idx, JET_CHARGE].item():.1f}" if has_charge else "n/a",
                 })
 
-            st.dataframe(pd.DataFrame(table_data), use_container_width=True)
+            if table_data:
+                st.dataframe(pd.DataFrame(table_data), use_container_width=True)
 
     with tab3:
         st.markdown("### Model Performance Benchmark")

@@ -4,7 +4,7 @@ from pathlib import Path
 try:
     import uproot
 except ImportError:
-    sys.exit("uproot not installed. Run: pip install -r requirements.txt")
+    sys.exit("uproot not installed. Run: pip install -e .")
 
 path = "data/cms/higgs/GluGluToHToTauTau.root"
 if not Path(path).exists():
@@ -17,7 +17,7 @@ with uproot.open(path) as file:
         if "Events" in k:
             tree_key = k
             break
-            
+
     if tree_key:
         tree = file[tree_key]
         print(f"\nTree '{tree_key}' has {tree.num_entries} events.")

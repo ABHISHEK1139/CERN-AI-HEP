@@ -10,12 +10,11 @@ scientific simulation tasks.
 """
 
 import logging
-from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import global_mean_pool, global_max_pool
+from torch_geometric.nn import global_max_pool, global_mean_pool
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +49,9 @@ class PhysicsNeMoWrapper(nn.Module):
         if use_physicsnemo:
             try:
                 self._init_physicsnemo(input_dim, hidden_dim, latent_dim, num_layers)
-                self._physicsnemo_available = True
-                logger.info("Using PhysicsNeMo MeshGraphNet backend")
+                self._physicsnemo_available = self._probe_physicsnemo(
+                    input_dim, latent_dim
+                )
             except Exception as e:  # ImportError, arity/config errors, missing CUDA, ...
                 logger.warning(
                     "PhysicsNeMo backend unavailable "
@@ -59,9 +59,20 @@ class PhysicsNeMoWrapper(nn.Module):
                     "Install with: pip install nvidia-physicsnemo\n"
                     "Falling back to PyG MeshGraphNet-style architecture."
                 )
+                # Drop any partially built submodules so the fallback owns the
+                # whole state_dict (otherwise load_state_dict sees extra keys).
+                for attr in ("mesh_graph_net", "node_encoder", "edge_encoder",
+                             "processors", "node_decoder"):
+                    if hasattr(self, attr):
+                        delattr(self, attr)
 
         if not self._physicsnemo_available:
             self._init_fallback(input_dim, hidden_dim, latent_dim, num_layers, dropout)
+
+        if self._physicsnemo_available:
+            logger.info("Using PhysicsNeMo MeshGraphNet backend")
+        else:
+            logger.info("Using PyG MeshGraphNet-style fallback backend")
 
         # Classification head
         self.classifier = nn.Sequential(
@@ -86,6 +97,47 @@ class PhysicsNeMoWrapper(nn.Module):
             hidden_dim_node_decoder=hidden_dim,
         )
 
+    def _probe_physicsnemo(self, input_dim: int, latent_dim: int) -> bool:
+        """Run a 3-node / 2-edge forward pass to confirm the native API.
+
+        PhysicsNeMo's ``MeshGraphNet.forward`` takes ``(node_features,
+        edge_features, graph_size)`` — not PyG's ``(x, edge_index, batch)``.
+        The old code passed the PyG ordering, which cannot work: the model's
+        own message passing never sees ``edge_index``. Rather than guess at
+        several API generations, run a tiny graph through it and check the
+        output shape. A mismatch or exception means "fall back", so a
+        mis-wired backend degrades to a known-good implementation instead of
+        producing garbage embeddings.
+        """
+        try:
+            dev = next(self.mesh_graph_net.parameters()).device
+            n, e = 3, 2
+            x = torch.zeros(n, input_dim, device=dev)
+            edge_attr = torch.zeros(e, 4, device=dev)
+            edge_index = torch.tensor([[0, 1], [1, 2]], device=dev)
+            graph_size = torch.zeros(n, dtype=torch.long, device=dev)
+
+            out = self._run_physicsnemo(x, edge_index, edge_attr, graph_size)
+            if not isinstance(out, torch.Tensor):
+                raise TypeError(f"expected a tensor, got {type(out).__name__}")
+            if tuple(out.shape) != (n, latent_dim):
+                raise ValueError(
+                    f"expected node embeddings of shape {(n, latent_dim)}, "
+                    f"got {tuple(out.shape)}"
+                )
+            return True
+        except Exception as e:
+            logger.warning(
+                "PhysicsNeMo MeshGraphNet failed its API self-check "
+                f"({type(e).__name__}: {e}); falling back to the PyG "
+                "implementation."
+            )
+            return False
+
+    def _run_physicsnemo(self, x, edge_index, edge_attr, graph_size):
+        """Invoke the native MeshGraphNet with PhysicsNeMo's argument order."""
+        return self.mesh_graph_net(x, edge_attr, graph_size, edge_index=edge_index)
+
     def _init_fallback(self, input_dim, hidden_dim, latent_dim, num_layers, dropout):
         """
         Fallback: MeshGraphNet-inspired architecture using PyTorch Geometric.
@@ -95,7 +147,7 @@ class PhysicsNeMoWrapper(nn.Module):
         2. Message passing processors with residual connections
         3. Node decoder
         """
-        from torch_geometric.nn import MessagePassing
+        from torch_geometric.nn import MessagePassing  # noqa: F401  (documents intent)
 
         # Node encoder
         self.node_encoder = nn.Sequential(
@@ -132,16 +184,36 @@ class PhysicsNeMoWrapper(nn.Module):
 
     def encode_graph(self, data):
         """Encode graph to a single vector."""
-        x = data.x
-        edge_index = data.edge_index
+        x = getattr(data, "x", None)
+        if x is None:
+            raise ValueError("PhysicsNeMoWrapper requires data.x node features.")
+        edge_index = getattr(data, "edge_index", None)
+        if edge_index is None:
+            edge_index = torch.empty((2, 0), dtype=torch.long, device=x.device)
         edge_attr = getattr(data, "edge_attr", None)
         batch = getattr(data, "batch", None)
         if batch is None:
             batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
 
         if self._physicsnemo_available:
-            # PhysicsNeMo path
-            node_emb = self.mesh_graph_net(x, edge_index, edge_attr)
+            if edge_attr is None:
+                # The native model needs explicit edge features; synthesise
+                # zeros so a caller without edge_attr still gets embeddings
+                # rather than a crash deep inside the encoder.
+                edge_attr = x.new_zeros(edge_index.size(1), 4)
+            try:
+                node_emb = self._run_physicsnemo(x, edge_index, edge_attr, batch)
+            except Exception as e:
+                logger.warning(
+                    "PhysicsNeMo forward failed (%s: %s); switching to the PyG "
+                    "fallback for the rest of this run.", type(e).__name__, e,
+                )
+                self._physicsnemo_available = False
+                self._init_fallback(
+                    self.input_dim, self.hidden_dim, self.latent_dim,
+                    len(getattr(self, "processors", [])) or 6, 0.0,
+                )
+                node_emb = self._fallback_forward(x, edge_index, edge_attr)
         else:
             # Fallback path
             node_emb = self._fallback_forward(x, edge_index, edge_attr)
@@ -240,6 +312,4 @@ class MeshGraphNetLayer(nn.Module):
         # Node update
         node_input = torch.cat([x, messages], dim=-1)
         node_update = self.node_mlp(node_input)
-        x = self.node_norm(x + self.dropout(node_update))  # residual
-
-        return x
+        return self.node_norm(x + self.dropout(node_update))  # residual

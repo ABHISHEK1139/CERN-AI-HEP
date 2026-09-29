@@ -12,12 +12,13 @@ Usage:
 """
 
 import logging
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Union
+from typing import Any
 
 import numpy as np
 
-from event_ingestion.config import EventConfig, PARTICLE_FEATURES
+from event_ingestion.config import PARTICLE_FEATURES, EventConfig
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 class EventLoader:
     """Load collision events from ROOT files or synthetic .npz files."""
 
-    def __init__(self, config: Optional[EventConfig] = None):
+    def __init__(self, config: EventConfig | None = None):
         self.config = config or EventConfig()
 
     # ----------------------------------------------------------------
@@ -34,10 +35,10 @@ class EventLoader:
 
     def load_root(
         self,
-        filepath: Union[str, Path],
-        max_events: Optional[int] = None,
+        filepath: str | Path,
+        max_events: int | None = None,
         tree_name: str = "Events",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Load events from a CMS NanoAOD ROOT file.
 
@@ -50,17 +51,17 @@ class EventLoader:
             List of event dicts, each containing particle info.
         """
         try:
+            import awkward  # noqa: F401 - the import is the availability check
             import uproot
-            import awkward as ak
-        except ImportError:
+        except ImportError as exc:
             raise ImportError(
                 "uproot and awkward required. Install: pip install uproot awkward"
-            )
+            ) from exc
 
         filepath = Path(filepath)
         if not filepath.exists():
             raise FileNotFoundError(f"ROOT file not found: {filepath}")
-        logger.info(f"Loading ROOT file: {filepath}")
+        logger.info("Loading ROOT file: %s", filepath)
 
         with uproot.open(filepath) as f:
             # Handle cycle suffixes ("Events;1") and exact names
@@ -117,7 +118,7 @@ class EventLoader:
 
     def _extract_event_from_arrays(
         self, arrays: Any, idx: int
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Extract a single event from awkward arrays."""
         import awkward as ak
 
@@ -225,8 +226,8 @@ class EventLoader:
     # ----------------------------------------------------------------
 
     def load_synthetic(
-        self, filepath: Union[str, Path]
-    ) -> List[Dict[str, Any]]:
+        self, filepath: str | Path
+    ) -> list[dict[str, Any]]:
         """
         Load events from synthetic .npz file.
 
@@ -244,7 +245,7 @@ class EventLoader:
         try:
             data = np.load(filepath, allow_pickle=True)
         except Exception as e:
-            raise ValueError(f"Could not load {filepath}: {e}")
+            raise ValueError(f"Could not load {filepath}: {e}") from e
         if "events" not in data:
             raise KeyError(f"{filepath} has no 'events' array (keys: {list(data.keys())}).")
         events = data["events"].tolist()
@@ -258,9 +259,9 @@ class EventLoader:
 
     def load(
         self,
-        filepath: Union[str, Path],
-        max_events: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        filepath: str | Path,
+        max_events: int | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Load events from any supported format.
 
@@ -276,19 +277,17 @@ class EventLoader:
         suffix = filepath.suffix.lower()
         if suffix == ".root":
             return self.load_root(filepath, max_events=max_events)
-        elif suffix == ".npz":
+        if suffix == ".npz":
             events = self.load_synthetic(filepath)
             if max_events:
                 events = events[:max_events]
             return events
-        else:
-            raise ValueError(f"Unsupported file format: {filepath.suffix}")
+        raise ValueError(f"Unsupported file format: {filepath.suffix}")
 
     def iter_events(
         self,
-        filepath: Union[str, Path],
-        max_events: Optional[int] = None,
-    ) -> Generator[Dict[str, Any], None, None]:
+        filepath: str | Path,
+        max_events: int | None = None,
+    ) -> Generator[dict[str, Any], None, None]:
         """Yield events one at a time (memory efficient)."""
-        for event in self.load(filepath, max_events=max_events):
-            yield event
+        yield from self.load(filepath, max_events=max_events)

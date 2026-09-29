@@ -6,15 +6,23 @@ __pycache__/
 dist/
 build/
 *.egg
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # Virtual Environment
 .venv/
+venv/
+env/
 
-# Data files (too large for git)
+# Large downloaded datasets (fetched via scripts/ or the downloader)
 data/
 *.root
+val_5M/
 
-# Model checkpoints (too large for git, except key best models)
+# Model checkpoints: only the published reference models are tracked
 checkpoints/*
 !checkpoints/README.md
 !checkpoints/classifier_gcn_best.pt
@@ -26,8 +34,22 @@ checkpoints/*
 !checkpoints/lhco_autoencoder/
 !checkpoints/lhco_autoencoder/lhco_gcn_best.pt
 
-# PyTorch Geometric processed cache
-graphs/
+# Generated outputs
+reports/
+results/
+mlruns/
+outputs/
+models/
+
+# Logs and scratch
+*.log
+error
+local_error
+local_error.log
+
+# Generated documents
+final_report_raw.pdf
+final_report_compressed.pdf
 
 # IDE
 .vscode/
@@ -37,46 +59,11 @@ graphs/
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# Temporary scripts (kept: rebuild_loss_curve.py is now robust with fallbacks)
-
-# Logs
-*.log
-
-# Generated outputs (do not commit)
-reports/
-results/
-mlruns/
-outputs/
-models/
-
-# Project clutter and temp files
-val_5M/
-error
-local_error
-final_report_raw.pdf
-final_report_compressed.pdf
-
-# Scratch: ignore generated artifacts but TRACK regression tests
-scratch/__pycache__/
-scratch/*.png
-scratch/*.pt
-!scratch/test_*.py
-!scratch/generate_readme_images.py
-
-# Jupyter
-.ipynb_checkpoints/
-
-# Testing
-.pytest_cache/
-
-# Coverage
-.coverage
-htmlcov/
+$RECYCLE.BIN/
 
 # Environment
 .env
 .env.*
 
-# Windows
-$RECYCLE.BIN/
+# Jupyter
+.ipynb_checkpoints/

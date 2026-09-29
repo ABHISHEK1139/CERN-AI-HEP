@@ -1,0 +1,212 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cern-ai-hep"
+version = "1.1.0"
+description = "Graph Neural Network anomaly detection for LHC collision events (JetClass, CMS NanoAOD, LHCO 2020)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Abhishek", email = "ak612520208365@gmail.com" }]
+keywords = [
+    "anomaly-detection",
+    "graph-neural-networks",
+    "high-energy-physics",
+    "particle-physics",
+    "jetclass",
+    "cern-open-data",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+dependencies = [
+    "torch>=2.0",
+    "torch-geometric>=2.4",
+    "uproot>=5.0",
+    "awkward>=2.0",
+    "h5py>=3.0",
+    "tables>=3.8",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+    "matplotlib>=3.7",
+    "seaborn>=0.12",
+    "Pillow>=10.0",
+    "networkx>=3.0",
+    "tqdm>=4.65",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    "mlflow>=2.8",
+    "streamlit>=1.30",
+    "umap-learn>=0.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.5",
+]
+docs = [
+    "markdown-pdf>=1.3",
+    "PyMuPDF>=1.23",
+]
+# torch-scatter / torch-sparse are OPTIONAL accelerators only. They need a C++
+# toolchain plus a wheel matching the exact torch/CUDA build, so they are not
+# installed by default. Every model in this repo runs without them.
+accelerators = [
+    "torch-scatter>=2.1; platform_system != 'Darwin'",
+    "torch-sparse>=0.6; platform_system != 'Darwin'",
+]
+
+[project.urls]
+Homepage = "https://github.com/ABHISHEK1139/CERN-AI-HEP"
+Repository = "https://github.com/ABHISHEK1139/CERN-AI-HEP"
+Issues = "https://github.com/ABHISHEK1139/CERN-AI-HEP/issues"
+
+[project.scripts]
+cern-ai-synthetic = "event_ingestion.synthetic:main"
+cern-ai-download = "event_ingestion.downloader:main"
+cern-ai-graphs = "graph_builder.graph_constructor:main"
+
+[tool.setuptools]
+# `experiments` and `scripts` are CLI entry points, not importable libraries.
+packages = [
+    "anomaly_engine",
+    "anomaly_engine.models",
+    "event_ingestion",
+    "graph_builder",
+    "physicsnemo_integration",
+]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+# Prepend the repo root so `tests` resolves to this directory rather than an
+# unrelated `tests` distribution in site-packages, and so the project packages
+# import without an editable install.
+pythonpath = ["."]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "slow: long-running tests (deselect with '-m \"not slow\"')",
+    "requires_data: needs a downloaded ROOT/H5 dataset (skipped when absent)",
+]
+filterwarnings = [
+    "error::RuntimeWarning",
+    "default",
+]
+log_cli_level = "INFO"
+
+[tool.coverage.run]
+source = [
+    "anomaly_engine",
+    "event_ingestion",
+    "graph_builder",
+    "physicsnemo_integration",
+]
+branch = true
+omit = ["*/__init__.py"]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = [
+    ".git",
+    ".ruff_cache",
+    ".pytest_cache",
+    "__pycache__",
+    "build",
+    "dist",
+    "data",
+    "checkpoints",
+    "docs",
+]
+
+[tool.ruff.lint]
+# Practical production baseline: correctness and clarity rules that the whole
+# codebase can actually satisfy. pydocstyle ("D"), pep8-naming ("N"),
+# flake8-use-pathlib ("PTH") and unused-argument ("ARG") are deliberately not
+# enabled repo-wide - they would mean a large stylistic diff unrelated to
+# correctness. Docstrings are still checked on the public API via the
+# per-file-ignores below.
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "RET",  # flake8-return
+    "RUF",  # ruff-specific
+]
+ignore = [
+    # Graph/particle physics legitimately uses short domain names (x, z, pt).
+    "E741",   # ambiguous variable name
+    "E501",   # line length is handled by the formatter
+    "B008",   # function call in default argument (argparse FileType pattern)
+    "RUF012", # mutable class attributes need ClassVar
+    "SIM105", # contextlib.suppress is not always clearer
+    "SIM108", # ternary is not always clearer
+    "B006",   # mutable default argument
+    # SIM118 rewrites `x in obj.keys()` to `x in obj`. That is equivalent for
+    # dicts but not guaranteed for the third-party containers used here
+    # (uproot directories, awkward arrays), so it is left alone.
+    "SIM118",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The Streamlit app executes UI code at import time by design.
+"demo.py" = ["E402", "F821", "F401", "E501"]
+# Test modules may use fixtures, private helpers and relaxed docstrings.
+"tests/*" = [
+    "E501", "ARG001", "ARG002", "B011", "SIM117", "F401", "F841",
+    "B007",   # loop variables used for readability in parametrised asserts
+    "RUF059", # unused unpacked fixtures
+    "RUF043", # regex metacharacters in pytest.raises(match=...)
+]
+# Experiment entry points are scripts, not libraries.
+"experiments/*.py" = ["E402"]
+"scripts/*.py" = ["E402"]
+"physicsnemo_experiments/*.py" = ["E402"]
+# Re-export surfaces: __init__ files import names for the public API.
+"*/__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "anomaly_engine",
+    "event_ingestion",
+    "graph_builder",
+    "physicsnemo_integration",
+    "experiments",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

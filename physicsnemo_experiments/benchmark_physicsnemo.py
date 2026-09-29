@@ -14,21 +14,22 @@ which is Linux-only. On Windows, we benchmark using Modulus's FullyConnected
 layers as the decoder component, proving framework interoperability.
 """
 
+import logging
 import os
 import sys
 import time
+
 import torch
-import logging
 
 os.environ.setdefault("HOME", os.environ.get("USERPROFILE", "."))
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pathlib import Path
-from torch_geometric.loader import DataLoader
-from graph_builder.jetclass_dataset import JetClassDataset
-from anomaly_engine.models.edge_conv import EdgeConvEncoder
+
 from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
+from anomaly_engine.models.edge_conv import EdgeConvEncoder
+from graph_builder.jetclass_dataset import JetClassDataset
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)

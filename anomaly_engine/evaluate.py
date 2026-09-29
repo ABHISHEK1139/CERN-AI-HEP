@@ -7,8 +7,7 @@ Evaluation utilities for classification and anomaly detection.
 """
 
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import matplotlib
 import numpy as np
@@ -18,6 +17,30 @@ from torch_geometric.loader import DataLoader
 matplotlib.use("Agg")
 
 logger = logging.getLogger(__name__)
+
+
+def _require_y(data) -> torch.Tensor:
+    """Return ``data.y`` or raise a clear error for unlabeled batches.
+
+    PyG ``Batch`` returns ``None`` for absent attributes, so a partially
+    labeled loader used to blow up much later with a bare ``KeyError: 'y'``
+    inside batching. Failing here names the real problem.
+    """
+    y = getattr(data, "y", None)
+    if y is None:
+        raise ValueError(
+            "This evaluation needs ground-truth labels (data.y) on every batch, "
+            "but an unlabeled graph was encountered. Evaluate on a labeled split."
+        )
+    return y
+
+
+def _graph_batch(data, num_nodes: int) -> torch.Tensor:
+    """Return the batch-assignment vector, defaulting to a single graph."""
+    batch = getattr(data, "batch", None)
+    if batch is None:
+        return torch.zeros(num_nodes, dtype=torch.long, device=data.x.device)
+    return batch
 
 
 class Evaluator:
@@ -38,7 +61,7 @@ class Evaluator:
         self,
         model: torch.nn.Module,
         loader: DataLoader,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Evaluate a classifier on a test set.
 
@@ -46,8 +69,12 @@ class Evaluator:
             Dict with accuracy, precision, recall, F1, AUC, confusion matrix.
         """
         from sklearn.metrics import (
-            accuracy_score, precision_score, recall_score, f1_score,
-            roc_auc_score, confusion_matrix,
+            accuracy_score,
+            confusion_matrix,
+            f1_score,
+            precision_score,
+            recall_score,
+            roc_auc_score,
         )
 
         model = model.to(self.device)
@@ -78,7 +105,7 @@ class Evaluator:
                 p = torch.sigmoid(logits[:, 0])
                 all_probs.extend(p.cpu().numpy())
                 all_preds.extend((logits[:, 0] > 0).long().cpu().numpy())
-            all_labels.extend(data.y.cpu().numpy().flatten())
+            all_labels.extend(_require_y(data).cpu().numpy().flatten())
 
         preds = np.array(all_preds)
         probs = np.array(all_probs)
@@ -87,8 +114,19 @@ class Evaluator:
         if len(labels) == 0:
             raise ValueError("evaluate_classifier received an empty DataLoader.")
 
-        n_classes = len(np.unique(labels))
-        average = "binary" if n_classes == 2 else "macro"
+        # 'binary' averaging requires labels in {0, 1}. Two present classes are
+        # not enough to guarantee that (e.g. labels {1, 2} is a two-class
+        # multiclass problem, and sklearn raises for it).
+        present = set(np.unique(labels).tolist())
+        n_classes = len(present)
+        is_binary = n_classes == 2 and present.issubset({0, 1})
+        average = "binary" if is_binary else "macro"
+        if n_classes == 2 and not is_binary:
+            logger.warning(
+                "Labels are not in {0, 1} (found %s); using macro averaging.",
+                sorted(present),
+            )
+
         results = {
             "accuracy": float(accuracy_score(labels, preds)),
             "precision": float(precision_score(labels, preds, average=average, zero_division=0)),
@@ -97,7 +135,7 @@ class Evaluator:
             "confusion_matrix": confusion_matrix(labels, preds).tolist(),
         }
 
-        if n_classes == 2:
+        if is_binary:
             results["auroc"] = float(roc_auc_score(labels, probs))
 
         return results
@@ -111,20 +149,21 @@ class Evaluator:
         self,
         model: torch.nn.Module,
         loader: DataLoader,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Evaluate autoencoder anomaly detection performance.
 
         Returns:
             Dict with AUROC, AUPRC, score statistics.
         """
-        from sklearn.metrics import roc_auc_score, average_precision_score
+        from sklearn.metrics import average_precision_score, roc_auc_score
 
         model = model.to(self.device)
         model.eval()
 
         all_scores = []
         all_labels = []
+        labels_aligned = True
 
         for data in loader:
             data = data.to(self.device)
@@ -134,11 +173,16 @@ class Evaluator:
                     "evaluate_autoencoder needs an autoencoder returning "
                     "dict(per_graph_loss=...). Use evaluate_classifier() for classifiers."
                 )
-            scores = result["per_graph_loss"].cpu().numpy()
+            scores = result["per_graph_loss"].detach().cpu().numpy().flatten()
             all_scores.extend(scores)
 
-            if data.y is not None:
-                all_labels.extend(data.y.cpu().numpy().flatten())
+            y = getattr(data, "y", None)
+            if y is None:
+                # Batches without labels make the label vector shorter than the
+                # score vector; any AUROC computed from it would be meaningless.
+                labels_aligned = False
+            else:
+                all_labels.extend(y.detach().cpu().numpy().flatten())
 
         scores = np.array(all_scores)
         labels = np.array(all_labels)
@@ -151,18 +195,28 @@ class Evaluator:
             "std_recon_error": float(np.std(scores)),
         }
 
-        if len(labels) > 0 and len(np.unique(labels)) > 1:
+        if not labels_aligned or len(labels) != len(scores):
+            if len(labels) > 0:
+                logger.warning(
+                    "Labels cover only %d of %d graphs; skipping AUROC/AUPRC to "
+                    "avoid comparing misaligned scores against labels.",
+                    len(labels), len(scores),
+                )
+            return results
+
+        if len(np.unique(labels)) > 1:
             results["auroc"] = float(roc_auc_score(labels, scores))
             results["auprc"] = float(average_precision_score(labels, scores))
 
             # Score separation
             normal_scores = scores[labels == 0]
             anomaly_scores = scores[labels == 1]
-            results["normal_mean"] = float(np.mean(normal_scores))
-            results["anomaly_mean"] = float(np.mean(anomaly_scores))
-            results["score_separation"] = float(
-                np.mean(anomaly_scores) - np.mean(normal_scores)
-            )
+            if len(normal_scores) and len(anomaly_scores):
+                results["normal_mean"] = float(np.mean(normal_scores))
+                results["anomaly_mean"] = float(np.mean(anomaly_scores))
+                results["score_separation"] = float(
+                    np.mean(anomaly_scores) - np.mean(normal_scores)
+                )
 
         return results
 
@@ -172,9 +226,9 @@ class Evaluator:
 
     def plot_training_curves(
         self,
-        history: Dict[str, List[float]],
+        history: dict[str, list[float]],
         title: str = "Training Curves",
-        output_path: Optional[str] = None,
+        output_path: str | None = None,
     ):
         """Plot training and validation loss curves."""
         import matplotlib.pyplot as plt
@@ -216,11 +270,26 @@ class Evaluator:
         labels: np.ndarray,
         scores: np.ndarray,
         model_name: str = "Model",
-        output_path: Optional[str] = None,
+        output_path: str | None = None,
     ):
         """Plot ROC curve."""
         import matplotlib.pyplot as plt
-        from sklearn.metrics import roc_curve, auc
+        from sklearn.metrics import auc, roc_curve
+
+        labels = np.asarray(labels).flatten()
+        scores = np.asarray(scores).flatten()
+        if len(labels) != len(scores):
+            raise ValueError(
+                f"plot_roc_curve needs one score per label, got "
+                f"{len(scores)} scores and {len(labels)} labels."
+            )
+        if len(labels) == 0:
+            raise ValueError("plot_roc_curve received no data.")
+        if len(np.unique(labels)) < 2:
+            raise ValueError(
+                "plot_roc_curve needs both classes present; got labels "
+                f"{np.unique(labels).tolist()}."
+            )
 
         fpr, tpr, _ = roc_curve(labels, scores)
         roc_auc = auc(fpr, tpr)
@@ -244,15 +313,28 @@ class Evaluator:
         self,
         scores: np.ndarray,
         labels: np.ndarray,
-        output_path: Optional[str] = None,
+        output_path: str | None = None,
     ):
         """Plot anomaly score distributions for normal vs anomalous events."""
         import matplotlib.pyplot as plt
 
-        fig, ax = plt.subplots(figsize=(10, 6))
+        scores = np.asarray(scores).flatten()
+        labels = np.asarray(labels).flatten()
+        if len(scores) != len(labels):
+            raise ValueError(
+                f"plot_score_distributions needs one score per label, got "
+                f"{len(scores)} scores and {len(labels)} labels."
+            )
 
         normal_scores = scores[labels == 0]
         anomaly_scores = scores[labels == 1]
+        if len(normal_scores) == 0 and len(anomaly_scores) == 0:
+            raise ValueError(
+                "plot_score_distributions expects labels in {0, 1}; got "
+                f"{np.unique(labels).tolist()}."
+            )
+
+        fig, ax = plt.subplots(figsize=(10, 6))
 
         ax.hist(normal_scores, bins=50, alpha=0.7, color="#3498db",
                 label=f"Normal (n={len(normal_scores)})", density=True)
@@ -275,7 +357,7 @@ class Evaluator:
         self,
         model: torch.nn.Module,
         loader: DataLoader,
-        output_path: Optional[str] = None,
+        output_path: str | None = None,
         method: str = "tsne",
     ):
         """
@@ -295,22 +377,19 @@ class Evaluator:
 
         all_embeddings = []
         all_labels = []
+        labels_aligned = True
 
         for data in loader:
             data = data.to(self.device)
 
             if getattr(data, "x", None) is None:
                 raise ValueError("plot_latent_space needs data.x node features.")
-            batch = getattr(data, "batch", None)
-            if batch is None:
-                batch = torch.zeros(
-                    data.x.size(0), dtype=torch.long, device=data.x.device
-                )
+            batch = _graph_batch(data, data.x.size(0))
 
             if hasattr(model, "encode_graph"):
                 try:
                     graph_emb = model.encode_graph(data)
-                except Exception:
+                except (TypeError, AttributeError):
                     graph_emb = model.encode_graph(data.x, data.edge_index, batch)
             elif hasattr(model, "encoder"):
                 z = model.encoder(data.x, data.edge_index, batch)
@@ -320,20 +399,44 @@ class Evaluator:
             else:
                 # Generic model forward
                 out = model(data)
-                if isinstance(out, dict) and "z" in out:
+                if isinstance(out, dict):
+                    if "z" not in out:
+                        raise TypeError(
+                            f"{type(model).__name__} returned a dict without a 'z' "
+                            f"key (keys: {sorted(out)}). plot_latent_space needs "
+                            f"node or graph embeddings - use an encoder, or a model "
+                            f"exposing encode_graph/get_latent."
+                        )
                     graph_emb = global_mean_pool(out["z"], batch)
                 else:
                     graph_emb = out
 
+            if not isinstance(graph_emb, torch.Tensor):
+                raise TypeError(
+                    f"plot_latent_space expected a tensor of embeddings from "
+                    f"{type(model).__name__}, got {type(graph_emb).__name__}."
+                )
+            graph_emb = graph_emb.detach()
+            if graph_emb.dim() == 1:
+                graph_emb = graph_emb.unsqueeze(-1)
             all_embeddings.append(graph_emb.cpu().numpy())
 
-            if data.y is not None:
-                all_labels.extend(data.y.cpu().numpy().flatten())
+            y = getattr(data, "y", None)
+            if y is not None:
+                all_labels.extend(y.detach().cpu().numpy().flatten())
+            else:
+                labels_aligned = False
 
         if not all_embeddings:
             raise ValueError("plot_latent_space received an empty DataLoader.")
         embeddings = np.concatenate(all_embeddings, axis=0)
         labels = np.array(all_labels)
+        if not labels_aligned or len(labels) != len(embeddings):
+            logger.warning(
+                "Labels cover %d of %d graphs; plotting latent space without "
+                "class colours.", len(labels), len(embeddings),
+            )
+            labels = np.array([])
 
         if len(embeddings) < 2:
             raise ValueError("plot_latent_space needs at least 2 graphs.")
@@ -381,8 +484,8 @@ class Evaluator:
 
     def plot_comparison_table(
         self,
-        results: Dict[str, Dict[str, float]],
-        output_path: Optional[str] = None,
+        results: dict[str, dict[str, float]],
+        output_path: str | None = None,
     ):
         """
         Plot comparison table of multiple models.
@@ -396,9 +499,17 @@ class Evaluator:
             raise ValueError("plot_comparison_table received empty results.")
         models = list(results.keys())
         metrics = ["auroc", "accuracy", "f1", "precision", "recall"]
-        available_metrics = [m for m in metrics if m in results[models[0]]]
+        # Union across every model: reading only models[0] silently dropped a
+        # metric that the remaining models actually reported.
+        available_metrics = [
+            m for m in metrics if any(m in results[name] for name in models)
+        ]
         if not available_metrics:
-            raise ValueError("plot_comparison_table found no plottable metrics.")
+            raise ValueError(
+                f"plot_comparison_table found no plottable metrics. Expected at "
+                f"least one of {metrics}; got keys per model: "
+                f"{ {n: sorted(r) for n, r in results.items()} }"
+            )
 
         fig, ax = plt.subplots(figsize=(12, 6))
 

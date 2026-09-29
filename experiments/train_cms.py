@@ -5,14 +5,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import numpy as np
 import torch
 import torch_geometric
-import numpy as np
-from graph_builder.cms_dataset import CMSDataset
-from anomaly_engine.models.gcn import GCNEncoder
-from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
-from anomaly_engine.trainer import Trainer
+
 from anomaly_engine.evaluate import Evaluator
+from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
+from anomaly_engine.models.gcn import GCNEncoder
+from anomaly_engine.trainer import Trainer
+from graph_builder.cms_dataset import CMSDataset
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ def main():
         label=0,
         sample_size=args.sample_bg
     )
-    
+
     logger.info("Loading CMS Higgs Signal Dataset...")
     sig_dataset = CMSDataset(
         root="data/cms/graphs",
@@ -51,7 +52,7 @@ def main():
     train_loader, val_loader, bg_test_loader = bg_dataset.get_loaders(
         batch_size=args.batch_size, train_ratio=0.8, val_ratio=0.1, test_ratio=0.1
     )
-    
+
     # Combine the held-out background test split with the signal set.
     # (Reuses bg_test_loader's disjoint split instead of re-splitting.)
     logger.info("Constructing mixed test set...")
@@ -81,7 +82,7 @@ def main():
         learning_rate=args.lr,
         checkpoint_dir="checkpoints/cms_autoencoder",
     )
-    
+
     history = trainer.train_autoencoder(
         train_loader=train_loader,
         val_loader=val_loader,
@@ -94,18 +95,24 @@ def main():
     logger.info("Evaluating Anomaly Detection Performance on CMS mixed test set...")
     evaluator = Evaluator(device=device)
     results = evaluator.evaluate_autoencoder(model, test_loader)
-    
+
     logger.info("--- Test Results ---")
     logger.info(f"AUROC: {results.get('auroc', 0.0):.4f}")
     if 'auprc' in results:
         logger.info(f"AUPRC: {results['auprc']:.4f}")
     if 'score_separation' in results:
         logger.info(f"Separation (Anomaly - Normal): {results['score_separation']:.4f}")
-        
+
     # Save ROC plot
     logger.info("Saving ROC Curve...")
-    Path("results").mkdir(exist_ok=True)
-    
+    Path("results").mkdir(parents=True, exist_ok=True)
+
+    evaluator.plot_training_curves(
+        history,
+        title="GCN Autoencoder (CMS)",
+        output_path="results/cms_loss.png",
+    )
+
     # Re-run to get scores for plotting
     model.eval()
     model.to(device)
@@ -116,10 +123,10 @@ def main():
             res = model(data)
             all_scores.extend(res['per_graph_loss'].cpu().numpy())
             all_labels.extend(data.y.cpu().numpy().flatten())
-            
+
     evaluator.plot_roc_curve(np.array(all_labels), np.array(all_scores), "GCN Autoencoder (CMS)", "results/cms_roc.png")
     evaluator.plot_score_distributions(np.array(all_scores), np.array(all_labels), "results/cms_scores.png")
-    
+
     logger.info("Done!")
 
 if __name__ == "__main__":

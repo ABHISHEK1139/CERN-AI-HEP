@@ -16,10 +16,10 @@ Or from CLI:
 
 import json
 import logging
-import urllib.request
 import urllib.error
+import urllib.request
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any
 
 from event_ingestion.config import EventConfig
 
@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 # ----------------------------------------------------------------------------
 
 CERN_OPENDATA_API = "https://opendata.cern.ch/api/records"
+
+REQUEST_TIMEOUT = 30      # seconds, for record metadata lookups
+DOWNLOAD_TIMEOUT = 300    # seconds, per socket read during file transfer
+CHUNK_SIZE = 1 << 20      # 1 MiB read granularity
 
 # Curated small NanoAOD samples suitable for ML development.
 # Each entry: (record_id, description, approximate_size_mb)
@@ -66,58 +70,120 @@ DEFAULT_DATASET = "doublemuon_2012"
 class CMSDataDownloader:
     """Download CMS Open Data NanoAOD files from CERN portal."""
 
-    def __init__(self, config: Optional[EventConfig] = None):
+    def __init__(self, config: EventConfig | None = None):
         self.config = config or EventConfig()
         self.config.ensure_dirs()
 
-    def list_available(self) -> Dict[str, dict]:
+    def list_available(self) -> dict[str, dict]:
         """List recommended datasets."""
         return RECOMMENDED_DATASETS
 
-    def get_record_files(self, record_id: int) -> List[Dict[str, str]]:
+    def get_record_files(self, record_id: int) -> list[dict[str, str]]:
         """
-        Fetch file list for a CERN Open Data record.
+        Fetch the file list for a CERN Open Data record.
+
+        The portal's record endpoint returns several different shapes, so all of
+        them are handled here. The old implementation only looked for a *list*
+        of dicts under ``metadata.files``; the portal actually returns a
+        *dict* of the form
+        ``{"entry": 1, "description": ..., "value": [{"key": ..., "size": ...,
+        "links": {"self": "/api/records/1234/files/NAME"}}]}``, which meant
+        every lookup silently produced an empty list and every download
+        reported "no ROOT files found".
 
         Args:
             record_id: CERN Open Data record identifier.
 
         Returns:
-            List of dicts with 'uri' and 'size' keys.
+            List of dicts with 'uri' and 'size' keys. Empty if the record
+            exposes no downloadable ROOT files.
+
+        Raises:
+            ValueError: If the record metadata cannot be parsed.
         """
         url = f"{CERN_OPENDATA_API}/{record_id}"
-        logger.info(f"Fetching record metadata from {url}")
+        logger.info("Fetching record metadata from %s", url)
 
         try:
             req = urllib.request.Request(url, headers={"Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
                 data = json.loads(resp.read().decode())
         except urllib.error.URLError as e:
-            logger.error(f"Failed to fetch record {record_id}: {e}")
+            logger.error("Failed to fetch record %s: %s", record_id, e)
             raise
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Record {record_id} returned non-JSON metadata: {e}") from e
 
-        files = []
-        # CERN Open Data API nests files under metadata.files or metadata.file_indices
-        metadata = data.get("metadata", data)
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"Expected a JSON object for record {record_id}, got {type(data).__name__}."
+            )
 
-        for file_entry in metadata.get("files", []):
-            uri = file_entry.get("uri", "")
-            size = file_entry.get("size", 0)
-            if uri.endswith(".root"):
-                files.append({"uri": uri, "size": size})
+        files: list[dict[str, str]] = []
+        seen = set()
 
-        # Fallback: check file_indices
+        def _add(uri: str | None, size: Any = 0) -> None:
+            """Record one ROOT file entry.
+
+            Only *URIs* are accepted. The portal also exposes a ``key`` field
+            holding a bare filename ("DYJetsToLL.root"); feeding that to
+            :meth:`download_file` would concatenate it onto the host and build
+            "https://opendata.cern.chDYJetsToLL.root". Real URIs start with a
+            scheme or a leading slash, so anything else is rejected.
+            """
+            if not isinstance(uri, str) or not uri:
+                return
+            uri = uri.strip()
+            if not (uri.startswith("http://") or uri.startswith("https://") or uri.startswith("/")):
+                return
+            if not uri.lower().split("?")[0].endswith(".root"):
+                return
+            if uri in seen:
+                return
+            seen.add(uri)
+            try:
+                size_int = int(size) if size else 0
+            except (TypeError, ValueError):
+                size_int = 0
+            files.append({"uri": uri, "size": size_int})
+
+        def _walk(node: Any) -> None:
+            """Depth-first scan for anything that looks like a ROOT file entry."""
+            if isinstance(node, dict):
+                # 'links'/'self' is how the portal addresses individual files and
+                # is preferred over 'key', which is only a filename.
+                links = node.get("links")
+                if isinstance(links, dict) and links.get("self"):
+                    _add(links["self"], node.get("size", node.get("bytes", 0)))
+                _add(node.get("uri"), node.get("size", node.get("bytes", 0)))
+                for value in node.values():
+                    if isinstance(value, (dict, list)):
+                        _walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    if isinstance(value, (dict, list)):
+                        _walk(value)
+
+        _walk(data)
+
+        logger.info("Found %d ROOT file(s) for record %s", len(files), record_id)
         if not files:
-            for idx in metadata.get("file_indices", []):
-                uri = idx.get("uri", "")
-                if uri:
-                    files.append({"uri": uri, "size": 0})
-
-        logger.info(f"Found {len(files)} ROOT file(s) for record {record_id}")
+            logger.warning(
+                "No .root entries in the metadata for record %s. Visit "
+                "https://opendata.cern.ch/record/%s to inspect it manually.",
+                record_id, record_id,
+            )
         return files
 
     def download_file(self, uri: str, output_dir: Path, max_size_mb: int = 500) -> Path:
         """
         Download a single file from CERN Open Data.
+
+        The transfer writes to a ``.partial`` sibling and is moved into place
+        only after the byte count matches ``Content-Length``. A previous
+        implementation streamed straight to the final path, so any interruption
+        left a truncated file that the next run happily accepted as complete
+        (it only checked ``size > 0``).
 
         Args:
             uri: File URI (relative or absolute).
@@ -125,8 +191,15 @@ class CMSDataDownloader:
             max_size_mb: Maximum file size to download (safety limit).
 
         Returns:
-            Path to downloaded file.
+            Path to the downloaded file.
+
+        Raises:
+            ValueError: If the file exceeds ``max_size_mb`` or the download is
+                incomplete.
         """
+        if max_size_mb < 1:
+            raise ValueError(f"max_size_mb must be >= 1, got {max_size_mb}.")
+
         # Construct full URL
         if uri.startswith("http"):
             url = uri
@@ -135,50 +208,76 @@ class CMSDataDownloader:
 
         filename = Path(uri.split("?")[0]).name or "download.root"
         # Sanitize Windows-illegal characters from query-derived names
-        filename = "".join(c for c in filename if c not in '<>:"/\\|?*').strip() or "download.root"
+        filename = "".join(
+            c for c in filename if c not in '<>:"/\\|?*'
+        ).strip() or "download.root"
         output_path = output_dir / filename
 
         if output_path.exists():
             size = output_path.stat().st_size
             if size > 0:
-                logger.info(f"File already exists: {output_path} ({size} bytes)")
+                logger.info("File already exists: %s (%d bytes)", output_path, size)
                 return output_path
-            logger.warning(f"Removing zero-byte partial download: {output_path}")
+            logger.warning("Removing zero-byte partial download: %s", output_path)
             output_path.unlink()
 
-        logger.info(f"Downloading {url} -> {output_path}")
+        logger.info("Downloading %s -> %s", url, output_path)
         output_dir.mkdir(parents=True, exist_ok=True)
+        partial_path = output_path.with_suffix(output_path.suffix + ".partial")
 
         try:
             req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=300) as resp:
+            with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT) as resp:
                 # Check content length
                 content_length = resp.headers.get("Content-Length")
-                if content_length and int(content_length) > max_size_mb * 1024 * 1024:
+                expected = 0
+                if content_length is not None:
+                    try:
+                        expected = int(content_length)
+                    except (TypeError, ValueError):
+                        expected = 0
+                if expected and expected > max_size_mb * 1024 * 1024:
                     raise ValueError(
-                        f"File too large: {int(content_length) / 1024 / 1024:.0f} MB "
+                        f"File too large: {expected / 1024 / 1024:.0f} MB "
                         f"(limit: {max_size_mb} MB). Use max_size_mb to increase."
                     )
 
                 # Stream download
-                with open(output_path, "wb") as f:
+                downloaded = 0
+                with open(partial_path, "wb") as f:
                     while True:
-                        chunk = resp.read(8192)
+                        chunk = resp.read(CHUNK_SIZE)
                         if not chunk:
                             break
                         f.write(chunk)
+                        downloaded += len(chunk)
+                        if max_size_mb and downloaded > max_size_mb * 1024 * 1024:
+                            raise ValueError(
+                                f"Transfer exceeded the {max_size_mb} MB limit "
+                                f"({downloaded / 1024 / 1024:.0f} MB) for {filename}."
+                            )
 
+            if expected and downloaded != expected:
+                raise ValueError(
+                    f"Incomplete download of {filename}: got {downloaded} bytes, "
+                    f"expected {expected}. Re-run to retry."
+                )
+            if downloaded == 0:
+                raise ValueError(f"Download of {filename} produced an empty file.")
+
+            # Atomic publish: only now does the file appear under its real name.
+            partial_path.replace(output_path)
         except Exception as e:
-            logger.error(f"Download failed: {e}")
-            if output_path.exists():
+            logger.error("Download failed: %s", e)
+            if partial_path.exists():
                 try:
-                    output_path.unlink()
+                    partial_path.unlink()
                 except OSError:
                     pass
             raise
 
         size_mb = output_path.stat().st_size / 1024 / 1024
-        logger.info(f"Downloaded {filename} ({size_mb:.1f} MB)")
+        logger.info("Downloaded %s (%.1f MB)", filename, size_mb)
         return output_path
 
     def download(
@@ -186,7 +285,7 @@ class CMSDataDownloader:
         dataset_key: str = DEFAULT_DATASET,
         max_files: int = 1,
         max_size_mb: int = 500,
-    ) -> List[Path]:
+    ) -> list[Path]:
         """
         Download a recommended CMS dataset.
 
