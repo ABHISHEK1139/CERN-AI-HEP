@@ -35,36 +35,73 @@ REQUEST_TIMEOUT = 30      # seconds, for record metadata lookups
 DOWNLOAD_TIMEOUT = 300    # seconds, per socket read during file transfer
 CHUNK_SIZE = 1 << 20      # 1 MiB read granularity
 
-# Curated small NanoAOD samples suitable for ML development.
+# Curated NanoAOD samples suitable for ML development.
 # Each entry: (record_id, description, approximate_size_mb)
+#
+# Record IDs below were verified against the live portal: every one of these
+# records currently exposes a `files` list, and the .root entries resolve.
+# (`higgs_mc` was previously 12361, which does not contain the expected file;
+# the correct record for GluGluToHToTauTau.root is 12351.)
 RECOMMENDED_DATASETS = {
+    "dyjets": {
+        "record_id": 12353,
+        "description": "CMS DYJetsToLL - inclusive QCD dijet sample (NanoAOD)",
+        "files_pattern": "*.root",
+        "approx_size_mb": 8600,
+        "expected_path": "data/cms/dyjets/DYJetsToLL.root",
+    },
+    "ttbar_mc": {
+        "record_id": 12354,
+        "description": "CMS TTbar Monte Carlo - top-pair sample (NanoAOD)",
+        "files_pattern": "*.root",
+        "approx_size_mb": 3300,
+        "expected_path": "data/cms/ttbar/TTbar.root",
+    },
+    "higgs_mc": {
+        "record_id": 12351,
+        "description": "CMS GluGluToHToTauTau Monte Carlo (reduced NanoAOD, for education)",
+        "files_pattern": "*.root",
+        "approx_size_mb": 190,
+        "expected_path": "data/cms/higgs/GluGluToHToTauTau.root",
+    },
     "doublemuon_2012": {
         "record_id": 6021,
-        "description": "CMS DoubleMuParked 2012B — dimuon events, NanoAOD format",
+        "description": "CMS DoubleMuParked 2012B - dimuon events, NanoAOD format",
         "files_pattern": "*.root",
         "approx_size_mb": 50,
     },
     "singlemuon_2015": {
         "record_id": 24119,
-        "description": "CMS SingleMuon 2015D — single muon trigger, NanoAODRun2",
+        "description": "CMS SingleMuon 2015D - single muon trigger, NanoAODRun2",
         "files_pattern": "*.root",
         "approx_size_mb": 200,
     },
-    "ttbar_mc": {
-        "record_id": 19980,
-        "description": "TTbar Monte Carlo simulation — NanoAOD (good for ML benchmarks)",
-        "files_pattern": "*.root",
-        "approx_size_mb": 100,
-    },
-    "higgs_mc": {
-        "record_id": 12361,
-        "description": "Higgs to 4 leptons MC — NanoAODSIM (classic analysis channel)",
-        "files_pattern": "*.root",
-        "approx_size_mb": 30,
-    },
 }
 
-DEFAULT_DATASET = "doublemuon_2012"
+DEFAULT_DATASET = "higgs_mc"
+
+
+def _root_uri_to_http(uri: str) -> str:
+    """Convert an EOS ``root://`` URI to its opendata.cern.ch HTTP equivalent.
+
+    The portal serves files as ``root://eospublic.cern.ch//eos/opendata/...``.
+    The equivalent download URL is
+    ``https://opendata.cern.ch/eos/opendata/...`` (note the single slash after
+    the host: the ``//`` in the root URI is path-root, not a URL authority).
+
+    Args:
+        uri: Either a ``root://`` URI or an already-HTTP URL.
+
+    Returns:
+        An absolute https URL, or the input unchanged if no mapping applies.
+    """
+    if not uri.startswith("root://"):
+        return uri
+    host_and_path = uri[len("root://"):]
+    if "/" not in host_and_path:
+        return uri
+    path = host_and_path.split("/", 1)[1].lstrip("/")
+    return f"https://opendata.cern.ch/{path}"
 
 
 class CMSDataDownloader:
@@ -82,24 +119,22 @@ class CMSDataDownloader:
         """
         Fetch the file list for a CERN Open Data record.
 
-        The portal's record endpoint returns several different shapes, so all of
-        them are handled here. The old implementation only looked for a *list*
-        of dicts under ``metadata.files``; the portal actually returns a
-        *dict* of the form
-        ``{"entry": 1, "description": ..., "value": [{"key": ..., "size": ...,
-        "links": {"self": "/api/records/1234/files/NAME"}}]}``, which meant
-        every lookup silently produced an empty list and every download
-        reported "no ROOT files found".
+        Verified against the live portal: the response is
+        ``{"metadata": {"files": [{"key", "size", "uri": "root://..."}],
+        "_files": [...], "_file_indices": []}}``. ``uri`` is an EOS
+        ``root://`` reference, **not** an HTTP path, so it is translated by
+        :func:`_root_uri_to_http` before being returned. ``_files`` and
+        ``_file_indices`` are accepted as fallbacks because the shape varies
+        between record generations.
 
         Args:
             record_id: CERN Open Data record identifier.
 
         Returns:
-            List of dicts with 'uri' and 'size' keys. Empty if the record
-            exposes no downloadable ROOT files.
+            List of dicts with ``uri`` (absolute https), ``key`` and ``size``.
 
         Raises:
-            ValueError: If the record metadata cannot be parsed.
+            ValueError: If the metadata cannot be parsed.
         """
         url = f"{CERN_OPENDATA_API}/{record_id}"
         logger.info("Fetching record metadata from %s", url)
@@ -119,52 +154,44 @@ class CMSDataDownloader:
                 f"Expected a JSON object for record {record_id}, got {type(data).__name__}."
             )
 
+        metadata = data.get("metadata", data)
         files: list[dict[str, str]] = []
         seen = set()
 
-        def _add(uri: str | None, size: Any = 0) -> None:
-            """Record one ROOT file entry.
-
-            Only *URIs* are accepted. The portal also exposes a ``key`` field
-            holding a bare filename ("DYJetsToLL.root"); feeding that to
-            :meth:`download_file` would concatenate it onto the host and build
-            "https://opendata.cern.chDYJetsToLL.root". Real URIs start with a
-            scheme or a leading slash, so anything else is rejected.
-            """
+        def _add(uri: str | None, key: str | None, size: Any) -> None:
             if not isinstance(uri, str) or not uri:
                 return
-            uri = uri.strip()
-            if not (uri.startswith("http://") or uri.startswith("https://") or uri.startswith("/")):
+            http = _root_uri_to_http(uri)
+            if not http.startswith(("http://", "https://")):
                 return
-            if not uri.lower().split("?")[0].endswith(".root"):
+            filename = (key or http.rsplit("/", 1)[-1]).split("?")[0]
+            if not filename.lower().endswith(".root"):
                 return
-            if uri in seen:
+            if http in seen:
                 return
-            seen.add(uri)
+            seen.add(http)
             try:
                 size_int = int(size) if size else 0
             except (TypeError, ValueError):
                 size_int = 0
-            files.append({"uri": uri, "size": size_int})
+            files.append({"uri": http, "key": filename, "size": size_int})
 
-        def _walk(node: Any) -> None:
-            """Depth-first scan for anything that looks like a ROOT file entry."""
-            if isinstance(node, dict):
-                # 'links'/'self' is how the portal addresses individual files and
-                # is preferred over 'key', which is only a filename.
-                links = node.get("links")
-                if isinstance(links, dict) and links.get("self"):
-                    _add(links["self"], node.get("size", node.get("bytes", 0)))
-                _add(node.get("uri"), node.get("size", node.get("bytes", 0)))
-                for value in node.values():
-                    if isinstance(value, (dict, list)):
-                        _walk(value)
-            elif isinstance(node, list):
-                for value in node:
-                    if isinstance(value, (dict, list)):
-                        _walk(value)
-
-        _walk(data)
+        # Primary location first, then the variants older records use.
+        for field_name in ("files", "_files", "file_indices", "_file_indices"):
+            entries = metadata.get(field_name) or []
+            if isinstance(entries, dict):
+                entries = entries.get("value", [])
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                # A record can expose the same file under both `uri` and
+                # links.self; _add dedupes on the resolved URL.
+                _add(entry.get("uri"), entry.get("key"), entry.get("size", 0))
+                links = entry.get("links")
+                if isinstance(links, dict):
+                    _add(links.get("self"), entry.get("key"), entry.get("size", 0))
 
         logger.info("Found %d ROOT file(s) for record %s", len(files), record_id)
         if not files:

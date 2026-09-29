@@ -266,29 +266,42 @@ class TestSyntheticGenerator:
 # CERN downloader
 # ==========================================================================
 
-# Shape the CERN Open Data portal actually returns: `files` is a dict whose
-# `value` list holds per-file entries, each with a bare-filename `key` and a
-# `links.self` API path.
+# Captured verbatim from GET https://opendata.cern.ch/api/records/12353.
+# `uri` is an EOS root:// reference -- NOT an HTTP path and NOT a
+# `links.self` entry. Parsing this correctly is what the tests below pin down.
 PORTAL_RECORD = {
-    "id": 12353,
-    "metadata": {"access_right": "open", "title": "DYJets"},
-    "files": {
-        "entry": 1,
-        "description": "Files",
-        "value": [
+    "created": "2024-12-02T21:55:36.154634+00:00",
+    "id": "12353",
+    "links": {"bucket": "...", "self": "https://opendata.cern.ch/api/records/12353"},
+    "updated": "2025-06-06T08:39:27.820913+00:00",
+    "metadata": {
+        "recid": 12353,
+        "title": "DYJetsToLL dataset in reduced NanoAOD format for education",
+        "files": [
             {
+                "bucket": "4997a85c-01fd-46c5-95f2-ddcabd400384",
+                "checksum": "adler32:dfd0d57c",
                 "key": "DYJetsToLL.root",
-                "size": 1024,
-                "links": {
-                    "self": "/api/records/12353/files/DYJetsToLL.root",
-                    "content": "https://opendata.cern.ch/api/records/12353/files/DYJetsToLL.root/content",
-                },
-            },
+                "size": 9247252629,
+                "tags": {},
+                "uri": (
+                    "root://eospublic.cern.ch//eos/opendata/cms/derived-data/"
+                    "AOD2NanoAODOutreachTool/DYJetsToLL.root"
+                ),
+            }
+        ],
+        "_file_indices": [],
+        "_files": [
             {
-                "key": "README.txt",
-                "size": 10,
-                "links": {"self": "/api/records/12353/files/README.txt"},
-            },
+                "availability": "online",
+                "file_id": "3bb07613-4522-4c5d-bd63-9ca6efd69713",
+                "key": "DYJetsToLL.root",
+                "size": 9247252629,
+                "uri": (
+                    "root://eospublic.cern.ch//eos/opendata/cms/derived-data/"
+                    "AOD2NanoAODOutreachTool/DYJetsToLL.root"
+                ),
+            }
         ],
     },
 }
@@ -328,54 +341,123 @@ def _stub_urlopen(monkeypatch, payload):
                         lambda req, timeout=None: Ctx())
 
 
-class TestDownloaderRecordParsing:
-    def test_finds_root_in_portal_shape(self, downloader, monkeypatch):
-        """Regression: only a *list* of dicts was inspected.
+class TestRootUriMapping:
+    """``root://`` -> https conversion, verified against the live portal."""
 
-        The portal returns a dict, so every lookup produced an empty list and
-        every download reported "no ROOT files found".
-        """
+    def test_maps_to_https(self):
+        from event_ingestion.downloader import _root_uri_to_http
+
+        raw = "root://eospublic.cern.ch//eos/opendata/cms/derived-data/DYJetsToLL.root"
+        assert _root_uri_to_http(raw) == (
+            "https://opendata.cern.ch/eos/opendata/cms/derived-data/DYJetsToLL.root"
+        )
+
+    def test_passes_through_http_urls(self):
+        from event_ingestion.downloader import _root_uri_to_http
+
+        url = "https://opendata.cern.ch/eos/x.root"
+        assert _root_uri_to_http(url) == url
+
+    def test_no_double_slash_after_host(self):
+        """The ``//`` after the host is a path root, not a URL authority."""
+        from event_ingestion.downloader import _root_uri_to_http
+
+        out = _root_uri_to_http("root://eospublic.cern.ch//eos/a/b.root")
+        assert "//eos" not in out.split("opendata.cern.ch", 1)[1]
+        assert out.startswith("https://opendata.cern.ch/eos/")
+
+    def test_malformed_root_uri_unchanged(self):
+        from event_ingestion.downloader import _root_uri_to_http
+
+        assert _root_uri_to_http("root://nopath") == "root://nopath"
+
+
+class TestDownloaderRecordParsing:
+    """Parsing of the real portal response shape.
+
+    Captured from ``GET https://opendata.cern.ch/api/records/12353``. Note
+    ``uri`` is an EOS ``root://`` reference, not an HTTP path -- an earlier
+    parser that assumed an HTTP ``links.self`` silently found zero files.
+    """
+
+    def test_finds_root_in_real_portal_shape(self, downloader, monkeypatch):
         _stub_urlopen(monkeypatch, PORTAL_RECORD)
         files = downloader.get_record_files(12353)
         assert len(files) == 1
-        assert files[0]["uri"] == "/api/records/12353/files/DYJetsToLL.root"
-        assert files[0]["size"] == 1024
+        assert files[0]["key"] == "DYJetsToLL.root"
+        assert files[0]["size"] == 9247252629
 
-    def test_uses_uri_not_bare_filename_key(self, downloader, monkeypatch):
-        """`key` is a filename, not a URI.
-
-        Concatenating it onto the host would yield
-        "https://opendata.cern.chDYJetsToLL.root", so the parser must return
-        the `links.self` path instead.
-        """
+    def test_uri_is_absolute_https(self, downloader, monkeypatch):
+        """download_file concatenates the host, so the URI must be absolute."""
         _stub_urlopen(monkeypatch, PORTAL_RECORD)
         uri = downloader.get_record_files(12353)[0]["uri"]
-        assert uri.startswith("/") or uri.startswith("http")
+        assert uri.startswith("https://opendata.cern.ch/eos/opendata/")
+
+    def test_never_emits_a_bare_filename_as_uri(self, downloader, monkeypatch):
+        """`key` is a filename; using it as a URI yields a broken URL."""
+        _stub_urlopen(monkeypatch, PORTAL_RECORD)
+        uri = downloader.get_record_files(12353)[0]["uri"]
         assert uri != "DYJetsToLL.root"
-        # The URL that download_file would build must be a valid absolute URL.
-        url = uri if uri.startswith("http") else f"https://opendata.cern.ch{uri}"
-        assert url.startswith("https://opendata.cern.ch/api/")
+        assert uri.count(" ") == 0
 
-    def test_handles_flat_list_shape(self, downloader, monkeypatch):
+    def test_underscore_files_fallback(self, downloader, monkeypatch):
         _stub_urlopen(monkeypatch, {
-            "files": [
-                {"uri": "/api/records/1/files/a.root", "size": 5},
-                {"uri": "/api/records/1/files/b.root", "size": 6},
-            ]
+            "metadata": {
+                "files": [],
+                "_files": [{
+                    "key": "x.root", "size": 7, "file_id": "abc",
+                    "uri": "root://eospublic.cern.ch//eos/opendata/x.root",
+                }],
+            }
         })
-        assert len(downloader.get_record_files(1)) == 2
+        files = downloader.get_record_files(1)
+        assert len(files) == 1 and files[0]["key"] == "x.root"
 
-    def test_deduplicates(self, downloader, monkeypatch):
+    def test_file_indices_fallback(self, downloader, monkeypatch):
         _stub_urlopen(monkeypatch, {
-            "files": [
-                {"uri": "/x/a.root", "size": 1},
-                {"uri": "/x/a.root", "size": 1},
-            ]
+            "metadata": {
+                "files": [],
+                "_files": [],
+                "file_indices": [{
+                    "key": "y.root", "size": 9,
+                    "uri": "root://eospublic.cern.ch//eos/opendata/y.root",
+                }],
+            }
         })
         assert len(downloader.get_record_files(1)) == 1
 
+    def test_skips_non_root_files(self, downloader, monkeypatch):
+        _stub_urlopen(monkeypatch, {
+            "metadata": {"files": [
+                {"key": "README.txt", "size": 10,
+                 "uri": "root://eospublic.cern.ch//eos/opendata/README.txt"},
+            ]}
+        })
+        assert downloader.get_record_files(1) == []
+
+    def test_deduplicates_same_file_twice(self, downloader, monkeypatch):
+        _stub_urlopen(monkeypatch, {
+            "metadata": {"files": [
+                {"key": "a.root", "size": 1,
+                 "uri": "root://eospublic.cern.ch//eos/opendata/a.root"},
+                {"key": "a.root", "size": 1,
+                 "uri": "root://eospublic.cern.ch//eos/opendata/a.root"},
+            ]}
+        })
+        assert len(downloader.get_record_files(1)) == 1
+
+    def test_ignores_links_self_relative_path(self, downloader, monkeypatch):
+        """A relative API path is not directly downloadable."""
+        _stub_urlopen(monkeypatch, {
+            "metadata": {"files": [
+                {"key": "a.root", "size": 1,
+                 "links": {"self": "/api/records/1/files/a.root"}},
+            ]}
+        })
+        assert downloader.get_record_files(1) == []
+
     def test_no_root_files_returns_empty(self, downloader, monkeypatch):
-        _stub_urlopen(monkeypatch, {"files": []})
+        _stub_urlopen(monkeypatch, {"metadata": {"files": []}})
         assert downloader.get_record_files(1) == []
 
     def test_non_dict_payload_raises(self, downloader, monkeypatch):
@@ -383,10 +465,15 @@ class TestDownloaderRecordParsing:
         with pytest.raises(ValueError, match="JSON object"):
             downloader.get_record_files(1)
 
-    def test_recommended_datasets_registry(self, downloader):
-        available = downloader.list_available()
-        assert "doublemuon_2012" in available
-        for key, info in available.items():
+    def test_recommended_records_have_expected_paths(self):
+        from event_ingestion.downloader import RECOMMENDED_DATASETS
+
+        assert RECOMMENDED_DATASETS["higgs_mc"]["record_id"] == 12351
+        assert RECOMMENDED_DATASETS["higgs_mc"]["expected_path"].endswith(
+            "GluGluToHToTauTau.root"
+        )
+        assert RECOMMENDED_DATASETS["ttbar_mc"]["record_id"] == 12354
+        for key, info in RECOMMENDED_DATASETS.items():
             assert isinstance(info["record_id"], int)
             assert info["description"]
 
