@@ -4,7 +4,7 @@ from pathlib import Path
 try:
     import uproot
 except ImportError:
-    sys.exit("uproot not installed. Run: pip install -r requirements.txt")
+    sys.exit("uproot not installed. Run: pip install -e .")
 
 path = "data/jetclass/val_5M/ZJetsToNuNu_120.root"
 if not Path(path).exists():

@@ -14,6 +14,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, global_mean_pool, global_max_pool
 
+from anomaly_engine.models.norm import apply_norm, resolve_norm
+
 
 class GCNEncoder(nn.Module):
     """GCN-based graph encoder for autoencoder."""
@@ -25,9 +27,12 @@ class GCNEncoder(nn.Module):
         latent_dim: int = 32,
         num_layers: int = 3,
         dropout: float = 0.1,
+        norm: str = "batch",
         **kwargs,
     ):
         super().__init__()
+        if num_layers < 1:
+            raise ValueError(f"num_layers must be >= 1, got {num_layers}.")
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
@@ -38,16 +43,16 @@ class GCNEncoder(nn.Module):
 
         # First layer
         self.convs.append(GCNConv(input_dim, hidden_dim))
-        self.norms.append(nn.BatchNorm1d(hidden_dim))
+        self.norms.append(resolve_norm(hidden_dim, norm))
 
         # Hidden layers
         for _ in range(max(num_layers - 2, 0)):
             self.convs.append(GCNConv(hidden_dim, hidden_dim))
-            self.norms.append(nn.BatchNorm1d(hidden_dim))
+            self.norms.append(resolve_norm(hidden_dim, norm))
 
         # Output layer
         self.convs.append(GCNConv(hidden_dim, latent_dim))
-        self.norms.append(nn.BatchNorm1d(latent_dim))
+        self.norms.append(resolve_norm(latent_dim, norm))
 
         self.dropout = dropout
 
@@ -65,8 +70,9 @@ class GCNEncoder(nn.Module):
         """
         for i, (conv, norm) in enumerate(zip(self.convs, self.norms)):
             x = conv(x, edge_index)
-            # BatchNorm needs >1 sample in train mode; skip it for degenerate batches.
-            x = norm(x) if x.size(0) > 1 else x
+            # SafeBatchNorm1d falls back to running stats for single-node batches,
+            # so degenerate graphs train instead of raising.
+            x = apply_norm(norm, x)
             if i < len(self.convs) - 1:
                 x = F.relu(x)
                 x = F.dropout(x, p=self.dropout, training=self.training)

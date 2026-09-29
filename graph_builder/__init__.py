@@ -7,12 +7,12 @@ Modules:
     dataset          — PyG InMemoryDataset and DataLoader integration
 """
 
+from graph_builder.dataset import CollisionEventDataset
 from graph_builder.features import FeatureExtractor
 from graph_builder.graph_constructor import EventGraphConstructor
-from graph_builder.dataset import CollisionEventDataset
 
 __all__ = [
-    "FeatureExtractor",
-    "EventGraphConstructor",
     "CollisionEventDataset",
+    "EventGraphConstructor",
+    "FeatureExtractor",
 ]

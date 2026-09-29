@@ -1,9 +1,10 @@
 import logging
-from typing import List, Iterator
-import numpy as np
+from collections.abc import Iterator
+
 import awkward as ak
-import uproot
+import numpy as np
 import torch
+import uproot
 from torch.utils.data import IterableDataset, get_worker_info
 from torch_geometric.data import Data
 
@@ -29,7 +30,7 @@ class JetClassIterableDataset(IterableDataset):
     """
     def __init__(
         self,
-        root_file_paths: List[str],
+        root_file_paths: list[str],
         k_neighbors: int = 8,
         max_particles: int = 128,
         chunk_size: int = 10000,
@@ -65,15 +66,14 @@ class JetClassIterableDataset(IterableDataset):
         source = torch.arange(n).unsqueeze(1).expand(-1, k).reshape(-1)
         target = indices.reshape(-1)
 
-        edge_index = torch.stack([source, target], dim=0)
-        return edge_index
+        return torch.stack([source, target], dim=0)
 
     def __iter__(self) -> Iterator[Data]:
         worker_info = get_worker_info()
         if worker_info is not None:
             # Partition files across workers
             files = [f for i, f in enumerate(self.root_file_paths) if i % worker_info.num_workers == worker_info.id]
-            # When using multiple workers, resume logic needs to be much more complex. 
+            # When using multiple workers, resume logic needs to be much more complex.
             # We assume num_workers=0 for resumable training.
             jets_to_skip = 0
         else:
@@ -90,7 +90,7 @@ class JetClassIterableDataset(IterableDataset):
                     if not tree_key:
                         continue
                     tree = file[tree_key]
-                    
+
                     # Iterate in chunks to save RAM
                     for arrays in tree.iterate(PARTICLE_FEATURES + LABEL_BRANCHES, step_size=self.chunk_size):
                         n_jets = len(arrays)
@@ -106,7 +106,7 @@ class JetClassIterableDataset(IterableDataset):
                         # Stack all features into a single dense block [n_jets, max_particles, 16]
                         node_feats_all = np.stack(padded_feats, axis=-1)
                         logger.debug(f"[Iterable] Stacked into {node_feats_all.shape}. Yielding...")
-                        
+
                         is_qcd = ak.to_numpy(arrays["label_QCD"]).astype(bool)
                         binary_labels = (~is_qcd).astype(np.int64)
 

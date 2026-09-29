@@ -19,17 +19,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import torch
 import numpy as np
+import torch
 from torch_geometric.loader import DataLoader
 
+from anomaly_engine.evaluate import Evaluator
+from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
+from anomaly_engine.models.edge_conv import EdgeConvEncoder
+from anomaly_engine.models.gcn import GCNEncoder
+from anomaly_engine.trainer import Trainer
 from graph_builder.jetclass_dataset import JetClassDataset
 from graph_builder.jetclass_iterable import JetClassIterableDataset
-from anomaly_engine.models.gcn import GCNEncoder
-from anomaly_engine.models.edge_conv import EdgeConvEncoder
-from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
-from anomaly_engine.trainer import Trainer
-from anomaly_engine.evaluate import Evaluator
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ def main():
             )
 
         logger.info(f"Large-scale mode: Found {len(bg_files)} background files and {len(sig_files)} signal files.")
-        
+
         # In large mode, we don't have validation splits out-of-the-box in the iterable dataset.
         # We will just train on the background files, and use the val set for mixed evaluation.
         # However, to keep it simple, we'll just train on the iterable background dataset.
@@ -74,15 +74,22 @@ def main():
             batch_size=args.batch_size,
         )
         train_loader = DataLoader(
-            train_ds, 
+            train_ds,
             batch_size=args.batch_size,
             pin_memory=True
         )
-        
+
         # We reuse the original JetClassDataset for validation/testing (small scale)
         val_bg_files = sorted(Path("data/jetclass/val_5M").glob("ZJetsToNuNu_*.root"))
         val_sig_files = sorted(Path("data/jetclass/val_5M").glob("HTo*.root"))
-        
+        if not val_bg_files or not val_sig_files:
+            raise FileNotFoundError(
+                "Large mode also needs held-out evaluation data under "
+                f"data/jetclass/val_5M/ (found {len(val_bg_files)} background, "
+                f"{len(val_sig_files)} signal files). This path was previously "
+                "unguarded and failed deep inside uproot."
+            )
+
         logger.info("Loading JetClass Validation Sets for Evaluation...")
         val_dataset = JetClassDataset(
             root="data/jetclass/graphs",
@@ -98,7 +105,7 @@ def main():
             sample_size=1000,
             tag="higgs_sig_val",
         )
-        
+
         # Split the QCD validation pool into disjoint val / test-background halves
         # so validation graphs never leak into the reported test set.
         n_val = len(val_dataset)
@@ -110,7 +117,7 @@ def main():
         val_loader = DataLoader(bg_val_ds, batch_size=args.batch_size, shuffle=False)
         mixed_test = torch.utils.data.ConcatDataset([bg_test_ds, sig_dataset])
         test_loader = DataLoader(mixed_test, batch_size=args.batch_size, shuffle=False)
-        
+
     else:
         # Small-scale in-memory dataset
         bg_files = sorted(Path("data/jetclass/val_5M").glob("ZJetsToNuNu_*.root"))
@@ -118,6 +125,12 @@ def main():
 
         if not bg_files:
             raise FileNotFoundError("No ZJetsToNuNu background files found in data/jetclass/val_5M/")
+        if not sig_files:
+            raise FileNotFoundError(
+                "No HTo* signal files found in data/jetclass/val_5M/. An "
+                "anomaly-detection evaluation needs a signal class; without "
+                "one the AUROC is undefined."
+            )
 
         bg_sample = args.sample
         sig_sample = max(1, int(args.sample * 0.2)) if args.sample else None
@@ -198,7 +211,16 @@ def main():
 
     # ---- Plots ----
     logger.info("Generating plots...")
-    Path("results").mkdir(exist_ok=True)
+    results_dir = Path("results")
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    # The trainer returns the *full* per-epoch curve (the best-checkpoint reload
+    # no longer truncates it), so the convergence figure is complete.
+    evaluator.plot_training_curves(
+        history,
+        title=f"{args.arch.upper()} Autoencoder (JetClass)",
+        output_path=str(results_dir / f"jetclass_{args.arch}_loss.png"),
+    )
 
     model.eval()
     model.to(device)

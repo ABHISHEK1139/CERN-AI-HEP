@@ -1,6 +1,8 @@
-from markdown_pdf import MarkdownPdf, Section
-import fitz
 import os
+
+import fitz
+from markdown_pdf import MarkdownPdf, Section
+
 
 def build_pdf():
     # Change working directory so local image paths resolve correctly
@@ -11,12 +13,12 @@ def build_pdf():
         temp_pdf = "final_report_raw.pdf"
         pdf = MarkdownPdf(toc_level=1)
 
-        with open("final_report.md", "r", encoding="utf-8") as f:
+        with open("final_report.md", encoding="utf-8") as f:
             md_text = f.read()
 
         parts = md_text.split("<!-- pagebreak -->")
 
-        for i, part in enumerate(parts):
+        for part in enumerate(parts):
             pdf.add_section(Section(part.strip(), toc=False))
 
         pdf.meta["title"] = "Final Report"

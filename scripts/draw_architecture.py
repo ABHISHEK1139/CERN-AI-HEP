@@ -1,7 +1,9 @@
 """Draw high-resolution, modern pipeline architecture diagram for CERN-AI-HEP."""
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 from pathlib import Path
+
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
+
 
 def draw_diagram():
     # Set 16:9 canvas with GitHub dark-mode background (#0d1117)
@@ -18,7 +20,7 @@ def draw_diagram():
     accent_green = '#3fb950'
     accent_purple = '#bc8cff'
     accent_orange = '#d29922'
-    accent_red = '#f85149'
+    _accent_red = '#f85149'
     accent_cyan = '#39c5cf'
     text_white = '#f0f6fc'
     text_muted = '#8b949e'
@@ -147,10 +149,10 @@ def draw_diagram():
         ax.annotate("",
                     xy=(x_end, y_mid),
                     xytext=(x_start, y_mid),
-                    arrowprops=dict(
-                        arrowstyle="-|>", color=arrow_color, lw=2.5,
-                        mutation_scale=15
-                    ))
+                    arrowprops={
+                        "arrowstyle": "-|>", "color": arrow_color, "lw": 2.5,
+                        "mutation_scale": 15,
+                    })
 
     # Bottom Architecture Summary Tag
     tag_bg = patches.FancyBboxPatch(

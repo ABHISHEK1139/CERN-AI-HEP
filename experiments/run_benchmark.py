@@ -15,81 +15,33 @@ import sys
 from pathlib import Path
 
 import yaml
-import torch
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from event_ingestion.synthetic import SyntheticEventGenerator
-from graph_builder.graph_constructor import EventGraphConstructor
-from graph_builder.dataset import CollisionEventDataset
 from anomaly_engine.evaluate import Evaluator
+from experiments.data_pipeline import ensure_graph_dataset
 from physicsnemo_integration.benchmark import PhysicsNeMoBenchmark
 
 
-def load_config(config_path=None):
+def load_config(config_path: str | None = None):
     if config_path is None:
         config_path = Path(__file__).parent / "configs" / "default.yaml"
-    with open(config_path) as f:
-        return yaml.safe_load(f)
+    path = Path(config_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+    with open(path) as f:
+        config = yaml.safe_load(f)
+    if not isinstance(config, dict):
+        raise ValueError(f"Config {path} is not a mapping (got {type(config).__name__}).")
+    for section in ("data", "model", "training", "benchmark", "output"):
+        if section not in config:
+            raise ValueError(f"Config {path} is missing the required '{section}' section.")
+    return config
 
 
-def prepare_data(config, data_dir=None):
-    """Prepare dataset for benchmarking."""
-    import json
-
-    graph_dir = Path(data_dir) if data_dir else Path(config["data"]["graphs"]["output"])
-    graphs_file = graph_dir / "graphs.pt"
-    fingerprint_file = graph_dir / "synthetic_fingerprint.json"
-
-    syn_config = config["data"]["synthetic"]
-    graph_cfg = config["data"]["graphs"]
-    fingerprint = {
-        "n_normal": syn_config["n_normal"],
-        "n_anomaly": syn_config["n_anomaly"],
-        "seed": syn_config["seed"],
-        "strategy": graph_cfg["strategy"],
-        "k": graph_cfg["k"],
-    }
-    try:
-        cached = json.loads(fingerprint_file.read_text())
-    except (OSError, ValueError):
-        cached = None
-    if cached != fingerprint and graphs_file.exists():
-        logging.info("Synthetic/graph config changed; regenerating graphs...")
-        graphs_file.unlink()
-
-    if graphs_file.exists():
-        graphs = torch.load(graphs_file, map_location="cpu", weights_only=False)
-    else:
-        logging.info("Generating synthetic data for benchmark...")
-        gen = SyntheticEventGenerator(seed=syn_config["seed"])
-        events, labels = gen.generate(
-            n_normal=syn_config["n_normal"],
-            n_anomaly=syn_config["n_anomaly"],
-        )
-
-        constructor = EventGraphConstructor(
-            strategy=graph_cfg["strategy"],
-            k=graph_cfg["k"],
-            delta_r_threshold=graph_cfg.get("delta_r", 1.5),
-        )
-        graphs = constructor.convert_dataset(events, labels)
-
-        graph_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(graphs, graphs_file)
-        fingerprint_file.write_text(json.dumps(fingerprint, indent=2))
-
-    dataset = CollisionEventDataset(root=str(graph_dir), graphs=graphs)
-    split_cfg = config.get("splits", {})
-    train_loader, val_loader, test_loader = dataset.get_loaders(
-        batch_size=config["training"]["batch_size"],
-        train_ratio=split_cfg.get("train", 0.7),
-        val_ratio=split_cfg.get("val", 0.15),
-        test_ratio=split_cfg.get("test", 0.15),
-        seed=split_cfg.get("seed", 42),
-    )
-
-    return train_loader, val_loader, test_loader, dataset
+def prepare_data(config, data_dir: str | None = None):
+    """Prepare dataset for benchmarking (shared with train_classifier.py)."""
+    return ensure_graph_dataset(config, data_dir)
 
 
 def main():
@@ -115,8 +67,7 @@ def main():
 
     # Prepare data
     train_loader, val_loader, test_loader, dataset = prepare_data(config, args.data)
-    stats = dataset.get_stats()
-    logging.info(f"Dataset: {stats}")
+    logging.info("Dataset: %s", dataset.get_stats())
 
     # Run benchmark
     model_config = config["model"]
@@ -124,6 +75,7 @@ def main():
         input_dim=model_config["input_dim"],
         hidden_dim=model_config["hidden_dim"],
         latent_dim=model_config["latent_dim"],
+        dropout=model_config.get("dropout", 0.2),
         device=args.device,
     )
 
@@ -152,8 +104,10 @@ def main():
             valid_results,
             output_path=str(figures_dir / "model_comparison.png"),
         )
+    else:
+        logging.error("Every model failed; skipping the comparison figure.")
 
-    logging.info(f"\nBenchmark complete. Results saved to {args.output}")
+    logging.info("Benchmark complete. Results saved to %s", args.output)
 
 
 if __name__ == "__main__":

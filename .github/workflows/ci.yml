@@ -6,33 +6,139 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  smoke:
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install --upgrade pip ruff
+      - name: Ruff check
+        run: ruff check .
+      - name: Ruff format (informational)
+        # Not enforced: the existing codebase predates ruff-format and
+        # reformatting it would bury the functional changes in style noise.
+        run: ruff format --check . --diff || true
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: pyproject.toml
 
-      - name: Install dependencies (CPU, no optional accelerators)
+      - name: Install CPU torch
+        # Installed first so pyproject.toml's `torch>=2.0` is already
+        # satisfied and pip does not pull a CUDA wheel onto the runner.
         run: |
           python -m pip install --upgrade pip
-          # CPU torch first; requirements.txt's `torch>=2.0` is then already
-          # satisfied so pip will not overwrite it with a CUDA wheel.
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install torch-geometric pytest pyyaml numpy scipy pandas scikit-learn tqdm matplotlib networkx
-          grep -v -E "^torch(vision)?>=|^torch-geometric>=" requirements.txt > /tmp/req_rest.txt
-          pip install -r /tmp/req_rest.txt || pip install pyyaml numpy scipy pandas scikit-learn tqdm matplotlib networkx
 
-      - name: Smoke test (synthetic GCN, CPU)
-        run: |
-          python experiments/train_classifier.py --config experiments/configs/smoke.yaml --model gcn --epochs 2 --device cpu
+      - name: Install project (dev extra)
+        run: pip install -e ".[dev]"
 
-      - name: Unit tests (heavy data skipped gracefully)
+      - name: Unit tests with coverage
+        # Heavy ROOT/HDF5 datasets are not downloaded; the suite exercises
+        # those code paths with synthetic files written by uproot/pandas.
         run: |
-          python -m pytest -rs
+          python -m pytest -rs --cov --cov-report=xml --cov-report=term
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  smoke:
+    name: End-to-end smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install CPU torch
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install project
+        run: pip install -e ".[dev]"
+
+      - name: Train a classifier (synthetic, CPU)
+        run: |
+          python experiments/train_classifier.py \
+            --config experiments/configs/smoke.yaml \
+            --model gcn --epochs 2 --device cpu
+
+      - name: Benchmark several architectures (synthetic, CPU)
+        run: |
+          python experiments/run_benchmark.py \
+            --config experiments/configs/smoke.yaml \
+            --models mlp cnn gcn graphsage --epochs 1 --device cpu \
+            --output results/benchmark.json
+
+      - name: Train an autoencoder end to end
+        run: |
+          python -c "
+          from experiments.data_pipeline import ensure_graph_dataset
+          from anomaly_engine.trainer import Trainer, set_seed
+          from anomaly_engine.models import get_autoencoder
+          from anomaly_engine.anomaly_scorer import AnomalyScorer
+          import yaml
+          cfg = yaml.safe_load(open('experiments/configs/smoke.yaml'))
+          set_seed(0)
+          tr, va, te, ds = ensure_graph_dataset(cfg)
+          ae = get_autoencoder('gcn', input_dim=11, hidden_dim=32, latent_dim=16,
+                               num_layers=2)
+          t = Trainer(ae, device='cpu', patience=3,
+                      checkpoint_dir=cfg['output']['checkpoints'])
+          h = t.train_autoencoder(tr, va, epochs=2, run_name='smoke')
+          assert len(h['train_loss']) == 2, h
+          s, l, e = AnomalyScorer(ae, device='cpu').score_dataset(te)
+          assert len(s) == len(l) == len(e) == len(te.dataset)
+          print('autoencoder OK:', len(s), 'test graphs scored')
+          "
+
+      - name: Demo module imports without side effects
+        run: python -c "import demo; print('demo import OK')"
+
+  package:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

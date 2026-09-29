@@ -6,7 +6,7 @@ Modules:
     benchmark — Run benchmarks comparing custom vs PhysicsNeMo models
 """
 
-from physicsnemo_integration.wrapper import PhysicsNeMoWrapper, MeshGraphNetLayer
 from physicsnemo_integration.benchmark import PhysicsNeMoBenchmark
+from physicsnemo_integration.wrapper import MeshGraphNetLayer, PhysicsNeMoWrapper
 
-__all__ = ["PhysicsNeMoWrapper", "MeshGraphNetLayer", "PhysicsNeMoBenchmark"]
+__all__ = ["MeshGraphNetLayer", "PhysicsNeMoBenchmark", "PhysicsNeMoWrapper"]

@@ -5,14 +5,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import numpy as np
 import torch
 import torch_geometric
-import numpy as np
-from graph_builder.lhco_dataset import LHCODataset
-from anomaly_engine.models.gcn import GCNEncoder
-from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
-from anomaly_engine.trainer import Trainer
+
 from anomaly_engine.evaluate import Evaluator
+from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
+from anomaly_engine.models.gcn import GCNEncoder
+from anomaly_engine.trainer import Trainer
+from graph_builder.lhco_dataset import LHCODataset
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -32,17 +33,17 @@ def main():
     # Load dataset
     logger.info("Loading LHCO Dataset...")
     dataset = LHCODataset(root="data/lhco/graphs", sample_size=args.sample)
-    
+
     # We want to train on purely BACKGROUND (label=0) for proper unsupervised anomaly detection.
     # We will split background into train and val.
     # Signal (label=1) will be used exclusively for testing the ROC AUC.
     bg_idx = (dataset.data.y == 0).nonzero(as_tuple=True)[0].tolist()
     sig_idx = (dataset.data.y == 1).nonzero(as_tuple=True)[0].tolist()
-    
+
     logger.info(f"Found {len(bg_idx)} background events and {len(sig_idx)} signal events.")
-    
+
     bg_dataset = dataset.index_select(bg_idx)
-    
+
     # Split bg into train/val
     train_loader, val_loader, bg_test_loader = bg_dataset.get_loaders(
         batch_size=args.batch_size, train_ratio=0.8, val_ratio=0.1, test_ratio=0.1
@@ -50,7 +51,6 @@ def main():
 
     # Combine held-out bg test split and all signal for final evaluation
     # (uses the disjoint bg_test split from get_loaders, avoiding train/test leakage)
-    from torch_geometric.data import Batch
     bg_test_graphs = [bg_test_loader.dataset.get(i) for i in range(len(bg_test_loader.dataset))]
     sig_graphs = [dataset.get(i) for i in sig_idx]
     mixed_test_graphs = bg_test_graphs + sig_graphs
@@ -73,7 +73,7 @@ def main():
         learning_rate=args.lr,
         checkpoint_dir="checkpoints/lhco_autoencoder",
     )
-    
+
     history = trainer.train_autoencoder(
         train_loader=train_loader,
         val_loader=val_loader,
@@ -86,18 +86,24 @@ def main():
     logger.info("Evaluating Anomaly Detection Performance on mixed test set...")
     evaluator = Evaluator(device=device)
     results = evaluator.evaluate_autoencoder(model, test_loader)
-    
+
     logger.info("--- Test Results ---")
     logger.info(f"AUROC: {results.get('auroc', 0.0):.4f}")
     if 'auprc' in results:
         logger.info(f"AUPRC: {results['auprc']:.4f}")
     if 'score_separation' in results:
         logger.info(f"Separation (Anomaly - Normal): {results['score_separation']:.4f}")
-        
+
     # Save ROC plot
     logger.info("Saving ROC Curve...")
-    Path("results").mkdir(exist_ok=True)
-    
+    Path("results").mkdir(parents=True, exist_ok=True)
+
+    evaluator.plot_training_curves(
+        history,
+        title="GCN Autoencoder (LHCO)",
+        output_path="results/lhco_loss.png",
+    )
+
     # Re-run to get scores for plotting
     model.eval()
     model.to(device)
@@ -108,10 +114,10 @@ def main():
             res = model(data)
             all_scores.extend(res['per_graph_loss'].cpu().numpy())
             all_labels.extend(data.y.cpu().numpy().flatten())
-            
+
     evaluator.plot_roc_curve(np.array(all_labels), np.array(all_scores), "GCN Autoencoder", "results/lhco_roc.png")
     evaluator.plot_score_distributions(np.array(all_scores), np.array(all_labels), "results/lhco_scores.png")
-    
+
     logger.info("Done!")
 
 if __name__ == "__main__":

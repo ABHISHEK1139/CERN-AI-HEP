@@ -11,10 +11,14 @@ Anomalous events: high reconstruction error (model cannot reconstruct well)
 This is an unsupervised approach — no anomaly labels needed during training.
 """
 
+from typing import Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import global_mean_pool
+
+from anomaly_engine.models.norm import resolve_norm
 
 
 class GraphDecoder(nn.Module):
@@ -29,16 +33,27 @@ class GraphDecoder(nn.Module):
         latent_dim: int = 32,
         hidden_dim: int = 64,
         output_dim: int = 11,
+        norm: Optional[str] = "batch",
     ):
+        """
+        Args:
+            latent_dim: Dimensionality of the latent node embeddings.
+            hidden_dim: Width of the decoder's hidden layers.
+            output_dim: Number of node features to reconstruct. Must match the
+                encoder's ``input_dim``.
+            norm: Normalization type: 'batch' (default), 'layer', or 'none'.
+                'batch' uses :class:`SafeBatchNorm1d`, which falls back to
+                running statistics for single-node batches instead of raising.
+        """
         super().__init__()
         self.output_dim = output_dim
         self.decoder = nn.Sequential(
             nn.Linear(latent_dim, hidden_dim),
             nn.ReLU(),
-            nn.BatchNorm1d(hidden_dim),
+            resolve_norm(hidden_dim, norm),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.BatchNorm1d(hidden_dim),
+            resolve_norm(hidden_dim, norm),
             nn.Linear(hidden_dim, output_dim),
         )
 
@@ -96,9 +111,17 @@ class GraphAutoencoder(nn.Module):
                 - per_node_loss: Per-node reconstruction error [N]
                 - per_graph_loss: Per-graph reconstruction error [B]
         """
-        x = data.x
-        edge_index = data.edge_index
-        batch = data.batch if hasattr(data, "batch") and data.batch is not None else torch.zeros(x.size(0), dtype=torch.long, device=x.device)
+        x = getattr(data, "x", None)
+        if x is None:
+            raise ValueError("GraphAutoencoder requires data.x node features.")
+        edge_index = getattr(data, "edge_index", None)
+        if edge_index is None:
+            # Edgeless graph: message passing degrades to a self-free identity
+            # transform rather than an AttributeError.
+            edge_index = torch.empty((2, 0), dtype=torch.long, device=x.device)
+        batch = getattr(data, "batch", None)
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
 
         # Encode
         z = self.encoder(x, edge_index, batch)
@@ -111,7 +134,7 @@ class GraphAutoencoder(nn.Module):
 
         # Aggregate per graph using efficient scatter
         from torch_geometric.utils import scatter
-        per_graph_loss = scatter(per_node_loss, batch, reduce='mean')
+        per_graph_loss = scatter(per_node_loss, batch, reduce="mean")
 
         loss = per_graph_loss.mean()
 

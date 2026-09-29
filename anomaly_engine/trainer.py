@@ -11,20 +11,43 @@ Features:
 - Learning rate scheduling
 - Checkpoint saving
 - Gradient clipping
+- Intra-epoch checkpointing for large streaming runs
 """
 
 import logging
-import time
+import random
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data import IterableDataset
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
+
+
+def set_seed(seed: int, deterministic: bool = True) -> None:
+    """Seed every RNG the training path can touch.
+
+    Args:
+        seed: Non-negative integer seed.
+        deterministic: When True, request deterministic cuDNN kernels so that
+            repeated runs on the same hardware reproduce bit-for-bit.
+    """
+    if seed < 0:
+        raise ValueError(f"seed must be >= 0, got {seed}.")
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 class Trainer:
@@ -54,10 +77,21 @@ class Trainer:
             use_mlflow: Whether to log to MLflow.
             experiment_name: MLflow experiment name.
         """
+        if learning_rate <= 0:
+            raise ValueError(f"learning_rate must be > 0, got {learning_rate}.")
+        if patience < 1:
+            raise ValueError(f"patience must be >= 1, got {patience}.")
+        if max_grad_norm <= 0:
+            raise ValueError(f"max_grad_norm must be > 0, got {max_grad_norm}.")
+
         if device == "auto":
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device(device)
+        if self.device.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError(
+                f"device='{device}' requested but CUDA is not available on this host."
+            )
 
         self.model = model.to(self.device)
         self.learning_rate = learning_rate
@@ -83,11 +117,11 @@ class Trainer:
         # Training state
         self.best_val_loss = float("inf")
         self.epochs_without_improvement = 0
-        self.history = {"train_loss": [], "val_loss": [], "lr": []}
+        self.history: dict[str, list] = {"train_loss": [], "val_loss": [], "lr": []}
 
-        logger.info(f"Trainer initialized: device={self.device}, lr={learning_rate}")
+        logger.info("Trainer initialized: device=%s, lr=%s", self.device, learning_rate)
 
-    def _init_mlflow(self, run_name: str, params: Dict[str, Any]):
+    def _init_mlflow(self, run_name: str, params: dict[str, Any]):
         """Initialize MLflow tracking."""
         if not self.use_mlflow:
             return
@@ -97,27 +131,29 @@ class Trainer:
             self._mlflow_run = mlflow.start_run(run_name=run_name)
             mlflow.log_params(params)
         except Exception as e:
-            logger.warning(f"MLflow init failed: {e}. Continuing without tracking.")
+            logger.warning("MLflow init failed: %s. Continuing without tracking.", e)
             self.use_mlflow = False
 
-    def _log_mlflow(self, metrics: Dict[str, float], step: int):
+    def _log_mlflow(self, metrics: dict[str, float], step: int):
         """Log metrics to MLflow."""
         if not self.use_mlflow:
             return
         try:
             import mlflow
             mlflow.log_metrics(metrics, step=step)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("MLflow metric logging failed: %s", e)
 
     def _end_mlflow(self):
         """End MLflow run."""
-        if self.use_mlflow and self._mlflow_run:
+        if self.use_mlflow and self._mlflow_run is not None:
             try:
                 import mlflow
                 mlflow.end_run()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("MLflow end_run failed: %s", e)
+            finally:
+                self._mlflow_run = None
 
     # ----------------------------------------------------------------
     # Classification Training
@@ -130,7 +166,7 @@ class Trainer:
         epochs: int = 100,
         run_name: str = "classifier",
         resume: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Train a graph classifier.
 
@@ -159,7 +195,9 @@ class Trainer:
 
         start_epoch = 0
         if resume:
-            start_epoch = self._load_checkpoint(f"{run_name}_latest.pt")
+            start_epoch = self._load_checkpoint(f"{run_name}_latest.pt", restore_history=False)
+            if start_epoch:
+                logger.info("Resuming classifier training from epoch %d", start_epoch + 1)
 
         for epoch in range(start_epoch + 1, epochs + 1):
             # Train
@@ -185,10 +223,16 @@ class Trainer:
 
             if epoch % 10 == 0 or epoch == 1:
                 logger.info(
-                    f"Epoch {epoch:3d}/{epochs}: "
-                    f"train_loss={train_loss:.4f} train_acc={train_acc:.3f} "
-                    f"val_loss={val_loss:.4f} val_acc={val_acc:.3f} lr={lr:.2e}"
+                    "Epoch %3d/%d: train_loss=%.4f train_acc=%.3f "
+                    "val_loss=%.4f val_acc=%.3f lr=%.2e",
+                    epoch, epochs, train_loss, train_acc, val_loss, val_acc, lr,
                 )
+
+            # Always save latest for resumable training, *before* the
+            # early-stop check, so a stopped run is resumable from the epoch it
+            # actually completed. (Saving after the break would discard the
+            # final completed epoch and silently redo it on --resume.)
+            self._save_checkpoint(f"{run_name}_latest.pt", epoch)
 
             # Early stopping
             if val_loss < self.best_val_loss:
@@ -198,14 +242,15 @@ class Trainer:
             else:
                 self.epochs_without_improvement += 1
                 if self.epochs_without_improvement >= self.patience:
-                    logger.info(f"Early stopping at epoch {epoch}")
+                    logger.info("Early stopping at epoch %d", epoch)
                     break
-                    
-            # Always save latest for resumable training
-            self._save_checkpoint(f"{run_name}_latest.pt", epoch)
 
         self._end_mlflow()
-        self._load_checkpoint(f"{run_name}_best.pt")
+        # Restore the best weights. restore_history=False keeps the full
+        # in-memory curve: reloading the best checkpoint used to overwrite
+        # self.history with that checkpoint's (shorter) history, silently
+        # truncating the returned loss curve at the best epoch.
+        self._load_checkpoint(f"{run_name}_best.pt", restore_history=False)
 
         return self.history
 
@@ -222,13 +267,13 @@ class Trainer:
 
     def _train_epoch_classifier(self, loader, criterion):
         self.model.train()
-        total_loss = 0
+        total_loss = 0.0
         correct = 0
         total = 0
 
         for data in loader:
             data = data.to(self.device)
-            self.optimizer.zero_grad()
+            self.optimizer.zero_grad(set_to_none=True)
 
             logits = self.model(data)
             target = self._require_labels(data)
@@ -250,7 +295,7 @@ class Trainer:
     @torch.no_grad()
     def _eval_epoch_classifier(self, loader, criterion):
         self.model.eval()
-        total_loss = 0
+        total_loss = 0.0
         correct = 0
         total = 0
 
@@ -280,8 +325,8 @@ class Trainer:
         epochs: int = 100,
         run_name: str = "autoencoder",
         resume: bool = False,
-        save_steps: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        save_steps: int | None = None,
+    ) -> dict[str, Any]:
         """
         Train a graph autoencoder (unsupervised).
 
@@ -310,9 +355,11 @@ class Trainer:
         start_epoch = 0
         start_batch = 0
         if resume:
-            start_epoch, start_batch = self._load_checkpoint_with_batch(f"{run_name}_latest.pt")
+            start_epoch, start_batch = self._load_checkpoint_with_batch(
+                f"{run_name}_latest.pt", restore_history=True
+            )
             if start_batch > 0:
-                logger.info(f"Resuming within epoch {start_epoch} at batch {start_batch}")
+                logger.info("Resuming within epoch %d at batch %d", start_epoch, start_batch)
                 # Tell IterableDataset to skip
                 if hasattr(train_loader.dataset, 'start_idx'):
                     bs = getattr(train_loader, 'batch_size', 1) or 1
@@ -322,17 +369,17 @@ class Trainer:
 
         for epoch in range(initial_epoch, epochs + 1):
             train_loss = self._train_epoch_autoencoder(
-                train_loader, 
-                epoch=epoch, 
-                run_name=run_name, 
-                save_steps=save_steps, 
+                train_loader,
+                epoch=epoch,
+                run_name=run_name,
+                save_steps=save_steps,
                 start_batch=start_batch if (start_batch > 0 and epoch == initial_epoch) else 0
             )
             # Reset start_batch and start_idx after first epoch
             start_batch = 0
             if hasattr(train_loader.dataset, 'start_idx'):
                 train_loader.dataset.start_idx = 0
-            
+
             val_loss = self._eval_epoch_autoencoder(val_loader)
 
             self.scheduler.step(val_loss)
@@ -349,9 +396,12 @@ class Trainer:
 
             if epoch % 10 == 0 or epoch == 1:
                 logger.info(
-                    f"Epoch {epoch:3d}/{epochs}: "
-                    f"train_loss={train_loss:.6f} val_loss={val_loss:.6f} lr={lr:.2e}"
+                    "Epoch %3d/%d: train_loss=%.6f val_loss=%.6f lr=%.2e",
+                    epoch, epochs, train_loss, val_loss, lr,
                 )
+
+            # Save latest before the early-stop check (see train_classifier).
+            self._save_checkpoint(f"{run_name}_latest.pt", epoch)
 
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
@@ -360,19 +410,25 @@ class Trainer:
             else:
                 self.epochs_without_improvement += 1
                 if self.epochs_without_improvement >= self.patience:
-                    logger.info(f"Early stopping at epoch {epoch}")
+                    logger.info("Early stopping at epoch %d", epoch)
                     break
-                    
-            self._save_checkpoint(f"{run_name}_latest.pt", epoch)
 
         self._end_mlflow()
-        self._load_checkpoint(f"{run_name}_best.pt")
+        # restore_history=False: keep the full curve collected this run.
+        self._load_checkpoint(f"{run_name}_best.pt", restore_history=False)
 
         return self.history
 
-    def _train_epoch_autoencoder(self, loader, epoch: int = 0, run_name: str = "", save_steps: Optional[int] = None, start_batch: int = 0):
+    def _train_epoch_autoencoder(
+        self,
+        loader,
+        epoch: int = 0,
+        run_name: str = "",
+        save_steps: int | None = None,
+        start_batch: int = 0,
+    ):
         self.model.train()
-        total_loss = 0
+        total_loss = 0.0
         total = 0
 
         # Create progress bar if save_steps is used (likely a large dataset)
@@ -384,24 +440,37 @@ class Trainer:
                 total_batches = None
             pbar = tqdm(total=total_batches, desc=f"Epoch {epoch}")
 
+        skip_to = max(0, start_batch)
         for batch_idx, data in enumerate(loader):
-            # Skip if we are resuming an IterableDataset which hasn't manually skipped
-            if batch_idx < start_batch and not isinstance(loader.dataset, torch.utils.data.IterableDataset):
-                if pbar is not None: pbar.update(1)
+            # Skip batches already consumed by a resumed map-style dataset.
+            # IterableDatasets cannot be re-indexed, so they are advanced via
+            # dataset.start_idx instead and must not be skipped here.
+            if (
+                batch_idx < skip_to
+                and not isinstance(getattr(loader, "dataset", None), IterableDataset)
+            ):
+                if pbar is not None:
+                    pbar.update(1)
                 continue
 
             data = data.to(self.device)
-            self.optimizer.zero_grad()
+            self.optimizer.zero_grad(set_to_none=True)
 
             result = self.model(data)
+            if not isinstance(result, dict) or "loss" not in result:
+                raise TypeError(
+                    "Autoencoder training needs a model returning dict(loss=...). "
+                    f"Got {type(result).__name__}."
+                )
             loss = result["loss"]
 
             loss.backward()
             nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
             self.optimizer.step()
 
-            total_loss += loss.item() * data.num_graphs
-            total += data.num_graphs
+            batch_graphs = data.num_graphs
+            total_loss += loss.item() * batch_graphs
+            total += batch_graphs
 
             if pbar is not None:
                 pbar.update(1)
@@ -409,14 +478,17 @@ class Trainer:
 
             # Intra-epoch checkpointing
             if save_steps and (batch_idx + 1) % save_steps == 0:
-                logger.info(f"Saving intra-epoch checkpoint at batch {batch_idx + 1}...")
+                logger.info("Saving intra-epoch checkpoint at batch %d...", batch_idx + 1)
                 self._save_checkpoint(f"{run_name}_latest.pt", epoch, batch_idx + 1)
 
         if pbar is not None:
             pbar.close()
 
         if total == 0:
-            raise ValueError("Autoencoder training received an empty DataLoader.")
+            raise ValueError(
+                "Autoencoder training received an empty DataLoader "
+                f"(epoch {epoch}, start_batch {start_batch})."
+            )
         return total_loss / total
 
     @torch.no_grad()
@@ -441,6 +513,8 @@ class Trainer:
 
     def _save_checkpoint(self, filename: str, epoch: int = 0, batch_idx: int = 0):
         path = self.checkpoint_dir / filename
+        # Copy the history: torch.save would otherwise serialize a live
+        # reference, and a later in-place append could leak into the file.
         torch.save({
             "epoch": epoch,
             "batch_idx": batch_idx,
@@ -448,31 +522,63 @@ class Trainer:
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict(),
             "best_val_loss": self.best_val_loss,
-            "history": self.history,
+            "history": {k: list(v) for k, v in self.history.items()},
             "epochs_without_improvement": self.epochs_without_improvement,
         }, path)
 
-    def _load_checkpoint(self, filename: str) -> int:
-        epoch, _ = self._load_checkpoint_with_batch(filename)
+    def _load_checkpoint(self, filename: str, restore_history: bool = True) -> int:
+        epoch, _ = self._load_checkpoint_with_batch(
+            filename, restore_history=restore_history
+        )
         return epoch
 
-    def _load_checkpoint_with_batch(self, filename: str) -> tuple[int, int]:
+    def _load_checkpoint_with_batch(
+        self, filename: str, restore_history: bool = True
+    ) -> tuple[int, int]:
+        """Load a checkpoint if present.
+
+        Args:
+            filename: Checkpoint filename inside :attr:`checkpoint_dir`.
+            restore_history: When False, the checkpoint's ``history`` is
+                ignored and the in-memory history is left untouched. Pass False
+                when reloading weights at the end of training, otherwise the
+                full loss curve is silently truncated to the best epoch's.
+
+        Returns:
+            ``(epoch, batch_idx)`` from the checkpoint, or ``(0, 0)`` when the
+            file does not exist.
+        """
         path = self.checkpoint_dir / filename
-        if path.exists():
+        if not path.exists():
+            logger.info("Checkpoint %s not found; starting fresh.", path)
+            return 0, 0
+
+        try:
             checkpoint = torch.load(path, map_location=self.device, weights_only=False)
-            self.model.load_state_dict(checkpoint["model_state_dict"])
-            
-            if "optimizer_state_dict" in checkpoint:
-                self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-            if "scheduler_state_dict" in checkpoint:
-                self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-                
-            self.best_val_loss = checkpoint.get("best_val_loss", float("inf"))
-            self.history = checkpoint.get("history", {"train_loss": [], "val_loss": [], "lr": []})
-            self.epochs_without_improvement = checkpoint.get("epochs_without_improvement", 0)
-            
-            epoch = checkpoint.get("epoch", 0)
-            batch_idx = checkpoint.get("batch_idx", 0)
-            logger.info(f"Loaded checkpoint from {path} (epoch {epoch}, batch {batch_idx})")
-            return epoch, batch_idx
-        return 0, 0
+        except Exception as exc:
+            raise RuntimeError(f"Failed to read checkpoint {path}: {exc}") from exc
+
+        if not isinstance(checkpoint, dict) or "model_state_dict" not in checkpoint:
+            raise ValueError(
+                f"Checkpoint {path} is malformed: expected a dict with "
+                "'model_state_dict'."
+            )
+
+        self.model.load_state_dict(checkpoint["model_state_dict"])
+
+        if "optimizer_state_dict" in checkpoint:
+            self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        if "scheduler_state_dict" in checkpoint:
+            self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+
+        self.best_val_loss = checkpoint.get("best_val_loss", float("inf"))
+        if restore_history:
+            self.history = checkpoint.get(
+                "history", {"train_loss": [], "val_loss": [], "lr": []}
+            )
+        self.epochs_without_improvement = checkpoint.get("epochs_without_improvement", 0)
+
+        epoch = checkpoint.get("epoch", 0)
+        batch_idx = checkpoint.get("batch_idx", 0)
+        logger.info("Loaded checkpoint from %s (epoch %d, batch %d)", path, epoch, batch_idx)
+        return epoch, batch_idx

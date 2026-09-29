@@ -7,15 +7,15 @@ collects metrics, and generates comparison reports.
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import torch
 from torch_geometric.loader import DataLoader
 
 from anomaly_engine.evaluate import Evaluator
+from anomaly_engine.models import CLASSIFIERS, get_classifier
 from anomaly_engine.trainer import Trainer
-from anomaly_engine.models import get_classifier, CLASSIFIERS
 from physicsnemo_integration.wrapper import PhysicsNeMoWrapper
 
 logger = logging.getLogger(__name__)
@@ -29,11 +29,13 @@ class PhysicsNeMoBenchmark:
         input_dim: int = 11,
         hidden_dim: int = 64,
         latent_dim: int = 32,
+        dropout: float = 0.2,
         device: str = "auto",
     ):
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
+        self.dropout = dropout
 
         if device == "auto":
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -41,16 +43,16 @@ class PhysicsNeMoBenchmark:
             self.device = torch.device(device)
 
         self.evaluator = Evaluator(device=str(self.device))
-        self.results = {}
+        self.results: dict[str, dict[str, Any]] = {}
 
     def run_benchmark(
         self,
         train_loader: DataLoader,
         val_loader: DataLoader,
         test_loader: DataLoader,
-        models_to_test: Optional[List[str]] = None,
+        models_to_test: list[str] | None = None,
         epochs: int = 50,
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> dict[str, dict[str, Any]]:
         """
         Run full benchmark across all models.
 
@@ -65,7 +67,7 @@ class PhysicsNeMoBenchmark:
             Dict of {model_name: metrics}.
         """
         if models_to_test is None:
-            models_to_test = list(CLASSIFIERS.keys()) + ["physicsnemo"]
+            models_to_test = [*CLASSIFIERS, "physicsnemo"]
 
         logger.info(f"Benchmarking {len(models_to_test)} models: {models_to_test}")
 
@@ -80,12 +82,20 @@ class PhysicsNeMoBenchmark:
                 )
                 self.results[model_name] = result
                 logger.info(
-                    f"{model_name}: accuracy={result.get('accuracy', 0):.3f}, "
-                    f"auroc={result.get('auroc', 0):.3f}"
+                    "%s: accuracy=%.3f, auroc=%.3f",
+                    model_name, result.get("accuracy", 0), result.get("auroc", 0),
                 )
             except Exception as e:
-                logger.error(f"Failed to benchmark {model_name}: {e}")
-                self.results[model_name] = {"error": str(e)}
+                # Keep going so one bad architecture does not abort the sweep,
+                # but log the full traceback: a bare message left users unable
+                # to tell a genuine metric failure from a wiring bug.
+                logger.error(
+                    "Failed to benchmark %s: %s: %s",
+                    model_name, type(e).__name__, e, exc_info=True,
+                )
+                self.results[model_name] = {
+                    "error": f"{type(e).__name__}: {e}",
+                }
 
         return self.results
 
@@ -96,21 +106,27 @@ class PhysicsNeMoBenchmark:
         val_loader: DataLoader,
         test_loader: DataLoader,
         epochs: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Train a single model and evaluate."""
         start_time = time.time()
 
         # Create model
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "input_dim": self.input_dim,
             "hidden_dim": self.hidden_dim,
             "latent_dim": self.latent_dim,
+            "dropout": self.dropout,
         }
 
         if model_name == "physicsnemo":
             model = PhysicsNeMoWrapper(**kwargs)
-        else:
+        elif model_name in CLASSIFIERS:
             model = get_classifier(model_name, **kwargs)
+        else:
+            raise ValueError(
+                f"Unknown model {model_name!r}. Expected one of "
+                f"{sorted(CLASSIFIERS)} or 'physicsnemo'."
+            )
 
         # Count parameters
         n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -121,9 +137,9 @@ class PhysicsNeMoBenchmark:
             device=str(self.device),
             learning_rate=1e-3,
             patience=10,
-            checkpoint_dir=f"checkpoints/{model_name}",
+            checkpoint_dir=f"checkpoints/benchmark/{model_name}",
         )
-        history = trainer.train_classifier(
+        trainer.train_classifier(
             train_loader, val_loader, epochs=epochs, run_name=model_name
         )
 
@@ -144,7 +160,7 @@ class PhysicsNeMoBenchmark:
             return
 
         print("\n" + "=" * 80)
-        print("MODEL COMPARISON — GNN Anomaly Detection for LHC Events")
+        print("MODEL COMPARISON - GNN Anomaly Detection for LHC Events")
         print("=" * 80)
         print(
             f"{'Model':<15} {'Accuracy':>10} {'AUROC':>8} {'F1':>8} "

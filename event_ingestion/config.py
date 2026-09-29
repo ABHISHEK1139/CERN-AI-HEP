@@ -7,8 +7,6 @@ following the CMS NanoAOD schema.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List
-
 
 # ---- Particle Feature Definitions ----
 
@@ -88,7 +86,7 @@ class EventConfig:
     cms_record_id: int = 12350  # /DoubleMuParked/Run2012B NanoAOD
 
     # Particle selection cuts (minimum pT in GeV)
-    min_pt: Dict[str, float] = field(default_factory=lambda: {
+    min_pt: dict[str, float] = field(default_factory=lambda: {
         "Muon": 5.0,
         "Electron": 7.0,
         "Photon": 10.0,
@@ -106,7 +104,7 @@ class EventConfig:
     delta_r_threshold: float = 1.5
 
     # Particle collections to use
-    particle_types: List[str] = field(
+    particle_types: list[str] = field(
         default_factory=lambda: ["Muon", "Electron", "Photon", "Jet", "MET"]
     )
 

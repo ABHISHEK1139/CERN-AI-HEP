@@ -17,7 +17,7 @@ CLI:
 
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 
@@ -56,11 +56,11 @@ MASS_VALUES = {
 class SyntheticEventGenerator:
     """Generate synthetic collision events with controllable anomalies."""
 
-    def __init__(self, config: Optional[EventConfig] = None, seed: int = 42):
+    def __init__(self, config: EventConfig | None = None, seed: int = 42):
         self.config = config or EventConfig()
         self.rng = np.random.RandomState(seed)
 
-    def _generate_particle(self, ptype: str, anomalous: bool = False) -> Dict[str, Any]:
+    def _generate_particle(self, ptype: str, anomalous: bool = False) -> dict[str, Any]:
         """Generate a single particle with physics-motivated features."""
         pinfo = PARTICLE_FEATURES[ptype]
 
@@ -103,7 +103,7 @@ class SyntheticEventGenerator:
         if ptype == "MET":
             energy = pt
         else:
-            energy = float(np.sqrt(pt**2 * np.cosh(eta) ** 2 + mass**2))
+            energy = self._energy(pt, eta, mass)
 
         return {
             "type": ptype,
@@ -118,7 +118,7 @@ class SyntheticEventGenerator:
 
     def _generate_event(
         self, event_id: int, anomalous: bool = False
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Generate a single collision event."""
         # Number of particles: Poisson-distributed
         if anomalous:
@@ -173,6 +173,14 @@ class SyntheticEventGenerator:
             for p in particles[1:3]:
                 p["eta"] = ref["eta"] + self.rng.normal(0, 0.1)
                 p["phi"] = ref["phi"] + self.rng.normal(0, 0.1)
+                # eta/phi moved, so energy must be recomputed: E^2 = pT^2
+                # cosh^2(eta) + m^2. Leaving the stale value would hand the
+                # model a particle whose stored energy contradicts its
+                # kinematics, which is exactly the kind of label-correlated
+                # artefact an anomaly detector must not learn from.
+                p["energy"] = self._energy(
+                    p["pt"], float(p["eta"]), float(p["mass"])
+                )
 
         return {
             "event_id": event_id,
@@ -182,11 +190,22 @@ class SyntheticEventGenerator:
             "anomaly_type": anomaly_type,
         }
 
+    @staticmethod
+    def _energy(pt: float, eta: float, mass: float) -> float:
+        """Relativistic energy E = sqrt(pT^2 cosh^2(eta) + m^2), overflow-safe."""
+        # |eta| > 20 overflows cosh^2 in float64 -> inf. Detector acceptance
+        # keeps |eta| well below that, so clamping is physically harmless.
+        eta = float(np.clip(eta, -20.0, 20.0))
+        value = pt * pt * np.cosh(eta) ** 2 + mass * mass
+        if not np.isfinite(value) or value < 0:
+            return float(abs(pt))
+        return float(np.sqrt(value))
+
     def generate(
         self,
         n_normal: int = 10000,
         n_anomaly: int = 1000,
-    ) -> Tuple[List[Dict[str, Any]], np.ndarray]:
+    ) -> tuple[list[dict[str, Any]], np.ndarray]:
         """
         Generate a dataset of normal and anomalous events.
 
@@ -198,7 +217,17 @@ class SyntheticEventGenerator:
             Tuple of (events list, labels array).
             Labels: 0 = normal, 1 = anomaly.
         """
-        logger.info(f"Generating {n_normal} normal + {n_anomaly} anomalous events...")
+        if n_normal < 0 or n_anomaly < 0:
+            raise ValueError(
+                f"Event counts must be >= 0, got n_normal={n_normal}, "
+                f"n_anomaly={n_anomaly}."
+            )
+        if n_normal + n_anomaly == 0:
+            raise ValueError("Requested 0 events; nothing to generate.")
+
+        logger.info(
+            "Generating %d normal + %d anomalous events...", n_normal, n_anomaly
+        )
 
         events = []
 
@@ -229,8 +258,8 @@ class SyntheticEventGenerator:
 
     def save(
         self,
-        output_path: Union[str, Path],
-        events: List[Dict[str, Any]],
+        output_path: str | Path,
+        events: list[dict[str, Any]],
         labels: np.ndarray,
     ) -> Path:
         """
@@ -242,19 +271,29 @@ class SyntheticEventGenerator:
             labels: Array of labels.
 
         Returns:
-            Path to saved file.
+            Path to saved file. This is the path that actually exists on disk,
+            which matters because :func:`numpy.savez` silently appends
+            ``.npz`` when the given name lacks that suffix. The old code
+            returned the pre-suffix path, handing callers a path that could
+            not be opened.
         """
+        if len(events) != len(labels):
+            raise ValueError(
+                f"events ({len(events)}) and labels ({len(labels)}) length mismatch."
+            )
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         np.savez(
             output_path,
             events=np.array(events, dtype=object),
-            labels=labels,
+            labels=np.asarray(labels),
         )
+        # Mirror numpy's suffix behaviour so the returned path is real.
+        written = output_path if output_path.suffix == ".npz" else output_path.with_suffix(".npz")
 
-        logger.info(f"Saved {len(events)} events to {output_path}")
-        return output_path
+        logger.info("Saved %d events to %s", len(events), written)
+        return written
 
 
 

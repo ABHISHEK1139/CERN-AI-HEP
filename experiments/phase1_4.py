@@ -1,10 +1,10 @@
-import uproot
-import awkward as ak
-import h5py
-import numpy as np
-import networkx as nx
-import matplotlib.pyplot as plt
 import os
+
+import h5py
+import matplotlib.pyplot as plt
+import networkx as nx
+import numpy as np
+import uproot
 
 # Create directories
 os.makedirs("research", exist_ok=True)
@@ -29,7 +29,8 @@ if os.path.exists(cms_file):
             print("\nCMS NanoAOD Branches (Subset):")
             keys = tree.keys()
             for k in ['nMuon', 'nTau', 'nJet', 'MET_pt']:
-                if k in keys: print(f" - {k}")
+                if k in keys:
+                    print(f" - {k}")
 
             print("\nExtracting first event...")
             # Get first event data (guard missing branches)
@@ -45,7 +46,7 @@ if os.path.exists(cms_file):
                 jet_pt = tree["Jet_pt"].array(entry_stop=1)[0]
                 jet_eta = tree["Jet_eta"].array(entry_stop=1)[0]
                 jet_phi = tree["Jet_phi"].array(entry_stop=1)[0]
-            
+
                 print(f"Found {len(muon_pt)} Muons and {len(jet_pt)} Jets in Event 0.")
 
                 # Build Graph

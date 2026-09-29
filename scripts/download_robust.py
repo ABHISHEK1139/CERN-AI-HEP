@@ -1,6 +1,7 @@
-import requests
 import os
 import time
+
+import requests
 
 url = "https://opendata.cern.ch/record/12353/files/DYJetsToLL.root"
 output_path = "data/cms/dyjets/DYJetsToLL.root"
@@ -10,9 +11,9 @@ def download_file(url, path):
     dir_name = os.path.dirname(path)
     if dir_name:
         os.makedirs(dir_name, exist_ok=True)
-    
+
     headers = {}
-    
+
     try:
         # NOTE: no Range/resume support — partial files are deleted on failure
         # and the whole file is re-downloaded on retry. No checksum is

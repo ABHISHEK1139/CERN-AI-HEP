@@ -13,17 +13,66 @@ Usage:
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
+def _describe(values) -> dict[str, float]:
+    """Mean/std/min/max/median of a 1-D sequence, as plain floats."""
+    arr = np.asarray(list(values), dtype=float)
+    if arr.size == 0:
+        return {
+            "mean": 0.0, "std": 0.0, "min": 0, "max": 0, "median": 0.0,
+        }
+    return {
+        "mean": float(np.mean(arr)),
+        "std": float(np.std(arr)),
+        "min": float(np.min(arr)),
+        "max": float(np.max(arr)),
+        "median": float(np.median(arr)),
+    }
+
+
+def _empty_summary() -> dict[str, Any]:
+    """Zero-particle summary with the same keys as a populated one.
+
+    The previous early-return omitted ``pt_GeV``/``eta``/``phi``/``energy_GeV``,
+    so ``print_summary`` raised ``KeyError: 'pt_GeV'`` on any dataset where
+    every event was filtered out.
+    """
+    return {
+        "n_events": 0,
+        "n_particles_total": 0,
+        "particles_per_event": {
+            "mean": 0.0, "std": 0.0, "min": 0, "max": 0, "median": 0.0,
+        },
+        "type_counts": {},
+        "type_fractions": {},
+        "pt_GeV": {
+            "mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0, "median": 0.0,
+        },
+        "eta": {
+            "mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0,
+        },
+        "phi": {
+            "mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0,
+        },
+        "mass_GeV": {
+            "mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0, "median": 0.0,
+        },
+        "energy_GeV": {
+            "mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0, "median": 0.0,
+        },
+    }
+
+
 class EventStatistics:
     """Compute and visualize collision event statistics."""
 
-    def compute(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def compute(self, events: list[dict[str, Any]]) -> dict[str, Any]:
         """
         Compute summary statistics over a list of events.
 
@@ -31,22 +80,25 @@ class EventStatistics:
             events: List of event dicts from EventLoader.
 
         Returns:
-            Dictionary of computed statistics.
+            Dictionary of computed statistics. The schema is identical whether
+            or not any particles were found, so callers (including
+            :meth:`print_summary`) never hit a KeyError on the zero-particle
+            path.
         """
         n_events = len(events)
         if n_events == 0:
-            return {"n_events": 0}
+            return _empty_summary()
 
         # Particle multiplicities
         multiplicities = [e.get("n_particles", len(e.get("particles", []))) for e in events]
 
         # Per-type counts
         type_counts = Counter()
-        all_pt = []
-        all_eta = []
-        all_phi = []
-        all_energy = []
-        all_mass = []
+        all_pt: list[float] = []
+        all_eta: list[float] = []
+        all_phi: list[float] = []
+        all_energy: list[float] = []
+        all_mass: list[float] = []
 
         for event in events:
             for p in event.get("particles", []):
@@ -59,70 +111,40 @@ class EventStatistics:
                 all_energy.append(p.get("energy", p["pt"]))
                 all_mass.append(p.get("mass", 0.0))
 
-        all_pt = np.array(all_pt)
-        all_eta = np.array(all_eta)
-        all_phi = np.array(all_phi)
-        all_energy = np.array(all_energy)
-        all_mass = np.array(all_mass)
-
         if len(all_pt) == 0:
-            return {
-                "n_events": n_events,
-                "n_particles_total": 0,
-                "particles_per_event": {
-                    "mean": float(np.mean(multiplicities)),
-                    "std": float(np.std(multiplicities)),
-                    "min": int(np.min(multiplicities)),
-                    "max": int(np.max(multiplicities)),
-                    "median": float(np.median(multiplicities)),
-                },
-                "type_counts": {},
-                "type_fractions": {},
-            }
+            summary = _empty_summary()
+            summary["n_events"] = n_events
+            summary["particles_per_event"] = _describe(multiplicities)
+            return summary
 
-        summary = {
+        pt_arr = np.asarray(all_pt, dtype=float)
+        eta_arr = np.asarray(all_eta, dtype=float)
+        phi_arr = np.asarray(all_phi, dtype=float)
+        energy_arr = np.asarray(all_energy, dtype=float)
+        mass_arr = np.asarray(all_mass, dtype=float)
+
+        return {
             "n_events": n_events,
-            "n_particles_total": len(all_pt),
-            "particles_per_event": {
-                "mean": float(np.mean(multiplicities)),
-                "std": float(np.std(multiplicities)),
-                "min": int(np.min(multiplicities)),
-                "max": int(np.max(multiplicities)),
-                "median": float(np.median(multiplicities)),
-            },
+            "n_particles_total": int(pt_arr.size),
+            "particles_per_event": _describe(multiplicities),
             "type_counts": dict(type_counts),
             "type_fractions": {
-                k: (v / len(all_pt) if len(all_pt) > 0 else 0.0)
-                for k, v in type_counts.items()
+                k: v / pt_arr.size for k, v in type_counts.items()
             },
-            "pt_GeV": {
-                "mean": float(np.mean(all_pt)),
-                "std": float(np.std(all_pt)),
-                "min": float(np.min(all_pt)),
-                "max": float(np.max(all_pt)),
-                "median": float(np.median(all_pt)),
-            },
-            "eta": {
-                "mean": float(np.mean(all_eta)),
-                "std": float(np.std(all_eta)),
-                "min": float(np.min(all_eta)),
-                "max": float(np.max(all_eta)),
-            },
-            "phi": {
-                "mean": float(np.mean(all_phi)),
-                "std": float(np.std(all_phi)),
-                "min": float(np.min(all_phi)),
-                "max": float(np.max(all_phi)),
-            },
+            "pt_GeV": _describe(pt_arr),
+            "eta": _describe(eta_arr),
+            "phi": _describe(phi_arr),
+            "mass_GeV": _describe(mass_arr),
             "energy_GeV": {
-                "mean": float(np.mean(all_energy)),
-                "std": float(np.std(all_energy)),
+                "mean": float(np.mean(energy_arr)),
+                "std": float(np.std(energy_arr)),
+                "min": float(np.min(energy_arr)),
+                "max": float(np.max(energy_arr)),
+                "median": float(np.median(energy_arr)),
             },
         }
 
-        return summary
-
-    def print_summary(self, events: List[Dict[str, Any]]) -> None:
+    def print_summary(self, events: list[dict[str, Any]]) -> None:
         """Print formatted statistics."""
         s = self.compute(events)
         if s["n_events"] == 0:
@@ -133,11 +155,11 @@ class EventStatistics:
         print("COLLISION EVENT STATISTICS")
         print("=" * 60)
         print(f"  Events:           {s['n_events']:,}")
-        print(f"  Total particles:  {s['n_particles_total']:,}")
+        print(f"  Total particles:  {s.get('n_particles_total', 0):,}")
         print()
         print("  Particles per event:")
         ppe = s["particles_per_event"]
-        print(f"    Mean:   {ppe['mean']:.1f} ± {ppe['std']:.1f}")
+        print(f"    Mean:   {ppe['mean']:.1f} +/- {ppe['std']:.1f}")
         print(f"    Range:  [{ppe['min']}, {ppe['max']}]")
         print(f"    Median: {ppe['median']:.0f}")
         print()
@@ -145,23 +167,32 @@ class EventStatistics:
         for ptype, count in sorted(s["type_counts"].items(), key=lambda x: -x[1]):
             frac = s["type_fractions"][ptype]
             print(f"    {ptype:12s}  {count:>8,}  ({frac:.1%})")
+        if not s["type_counts"]:
+            print("    (none - every event had zero usable particles)")
+
+        if s.get("n_particles_total", 0) == 0:
+            print()
+            print("  No particles survived selection; distribution stats omitted.")
+            print("=" * 60)
+            return
+
         print()
         print("  Transverse momentum (pT):")
         pt = s["pt_GeV"]
-        print(f"    Mean:   {pt['mean']:.1f} ± {pt['std']:.1f} GeV")
+        print(f"    Mean:   {pt['mean']:.1f} +/- {pt['std']:.1f} GeV")
         print(f"    Range:  [{pt['min']:.1f}, {pt['max']:.1f}] GeV")
         print(f"    Median: {pt['median']:.1f} GeV")
         print()
-        print("  Pseudorapidity (η):")
+        print("  Pseudorapidity (eta):")
         eta = s["eta"]
-        print(f"    Mean:   {eta['mean']:.2f} ± {eta['std']:.2f}")
+        print(f"    Mean:   {eta['mean']:.2f} +/- {eta['std']:.2f}")
         print(f"    Range:  [{eta['min']:.2f}, {eta['max']:.2f}]")
         print("=" * 60)
 
     def plot_distributions(
         self,
-        events: List[Dict[str, Any]],
-        output_dir: Optional[str] = None,
+        events: list[dict[str, Any]],
+        output_dir: str | None = None,
         show: bool = False,
     ) -> None:
         """

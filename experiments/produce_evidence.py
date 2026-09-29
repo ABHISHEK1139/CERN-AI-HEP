@@ -1,20 +1,22 @@
 import logging
-from pathlib import Path
-import torch
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE
-from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score
-from torch_geometric.loader import DataLoader
-import networkx as nx
-
 import os
 import sys
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import networkx as nx
+import numpy as np
+import torch
+from sklearn.manifold import TSNE
+from sklearn.metrics import auc, average_precision_score, precision_recall_curve, roc_curve
+from torch_geometric.loader import DataLoader
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from graph_builder.jetclass_dataset import JetClassDataset
-from anomaly_engine.models.edge_conv import EdgeConvEncoder
+from anomaly_engine.checkpoint import load_state_dict
 from anomaly_engine.models.autoencoder import GraphAutoencoder, GraphDecoder
+from anomaly_engine.models.edge_conv import EdgeConvEncoder
+from graph_builder.jetclass_dataset import JetClassDataset
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -25,11 +27,11 @@ def plot_loss_curve(checkpoint_path, output_path):
     if not history or 'train_loss' not in history:
         logger.warning("No history found in checkpoint for loss curve.")
         return
-    
+
     epochs = range(1, len(history['train_loss']) + 1)
     plt.figure(figsize=(8, 6))
     plt.plot(epochs, history['train_loss'], label='Train Loss', marker='o')
-    if 'val_loss' in history and history['val_loss']:
+    if history.get('val_loss'):
         plt.plot(epochs, history['val_loss'], label='Validation Loss', marker='o')
     plt.xlabel('Epoch')
     plt.ylabel('Loss (MSE)')
@@ -67,41 +69,51 @@ def draw_event_graph(data, output_path):
 def generate_evidence():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     out_dir = Path("results")
-    out_dir.mkdir(exist_ok=True)
-    
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     # 1. Plot Loss Curve
-    ckpt_path = "checkpoints/jetclass_autoencoder/jetclass_edgeconv_best.pt"
-    if Path(ckpt_path).exists():
-        plot_loss_curve(ckpt_path, out_dir / "loss_curve.png")
-    else:
-        logger.warning(f"{ckpt_path} not found.")
+    ckpt_path = Path("checkpoints/jetclass_autoencoder/jetclass_edgeconv_best.pt")
 
     # Load data for evaluation
     val_bg_files = sorted(Path("data/jetclass/val_5M").glob("ZJetsToNuNu_*.root"))
     val_sig_files = sorted(Path("data/jetclass/val_5M").glob("HTo*.root"))
-    
+    if not val_bg_files or not val_sig_files:
+        raise FileNotFoundError(
+            f"JetClass validation ROOT files missing under data/jetclass/val_5M/ "
+            f"(found {len(val_bg_files)} background, {len(val_sig_files)} signal). "
+            f"Download them before generating evidence figures."
+        )
+
+    if ckpt_path.exists():
+        plot_loss_curve(str(ckpt_path), out_dir / "loss_curve.png")
+    else:
+        logger.warning("%s not found; skipping the loss-curve figure.", ckpt_path)
+
     bg_dataset = JetClassDataset(root="data/jetclass/graphs", root_file_paths=[str(f) for f in val_bg_files], k_neighbors=8, sample_size=1000, tag="ev_bg")
     sig_dataset = JetClassDataset(root="data/jetclass/graphs", root_file_paths=[str(f) for f in val_sig_files], k_neighbors=8, sample_size=1000, tag="ev_sig")
-    
+    if len(bg_dataset) == 0 or len(sig_dataset) == 0:
+        raise ValueError(
+            f"JetClass datasets are empty (bg={len(bg_dataset)}, sig={len(sig_dataset)}); "
+            f"no jets survived preprocessing, so no evidence can be produced."
+        )
+
     mixed_test = torch.utils.data.ConcatDataset([bg_dataset, sig_dataset])
     test_loader = DataLoader(mixed_test, batch_size=256, shuffle=False)
 
     # 2. Plot Event Graph (from first event)
     draw_event_graph(bg_dataset[0], out_dir / "event_graph.png")
 
-    # Load Model
+    # Load Model. This is a hard requirement: a randomly initialised
+    # autoencoder still emits finite per_graph_loss values, so the ROC/AUPRC
+    # and latent-space figures would look entirely plausible while being pure
+    # noise. Fail instead.
     input_dim, hidden_dim, latent_dim = 16, 64, 32
     encoder = EdgeConvEncoder(input_dim=input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim, num_layers=3)
     decoder = GraphDecoder(latent_dim=latent_dim, hidden_dim=hidden_dim, output_dim=input_dim)
     model = GraphAutoencoder(encoder=encoder, decoder=decoder).to(device)
-    
-    if Path(ckpt_path).exists():
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-        if "model_state_dict" not in ckpt:
-            logger.warning(f"{ckpt_path} has no 'model_state_dict'; using random weights.")
-        else:
-            model.load_state_dict(ckpt["model_state_dict"])
-    model.eval()
+
+    load_state_dict(ckpt_path, model, device=device)
+    logger.info("Loaded trained weights from %s", ckpt_path)
 
     all_scores, all_labels, all_latents = [], [], []
     with torch.no_grad():
@@ -120,6 +132,17 @@ def generate_evidence():
     scores = np.array(all_scores)
     labels = np.array(all_labels)
     latents = np.vstack(all_latents)
+
+    if len(labels) != len(scores):
+        raise ValueError(
+            f"Label/score length mismatch ({len(labels)} vs {len(scores)}); "
+            f"refusing to plot a misaligned ROC."
+        )
+    if len(np.unique(labels)) < 2:
+        raise ValueError(
+            f"Test set has a single class ({np.unique(labels).tolist()}); "
+            f"AUROC is undefined."
+        )
 
     # Report raw AUROC first; only direction-correct for plots (labeled as such).
     # Post-hoc flipping on test scores would inflate the headline metric.
@@ -152,7 +175,7 @@ def generate_evidence():
     # 3.5 Plot Precision-Recall (PR) Curve
     precision, recall, _ = precision_recall_curve(labels, scores)
     pr_auc = average_precision_score(labels, scores)
-    
+
     plt.figure(figsize=(8, 6))
     plt.plot(recall, precision, color='purple', lw=2, label=f'EdgeConv (AP = {pr_auc:.4f})')
     plt.xlabel('Recall')
@@ -168,14 +191,20 @@ def generate_evidence():
     plt.figure(figsize=(8, 6))
     bg_scores = scores[labels == 0]
     sig_scores = scores[labels == 1]
-    
+
     # Clip extreme outliers for better visualization (overflow counts logged)
     q_high = np.percentile(scores, 95)
     q_low = np.percentile(scores, 5)
+    if q_high <= q_low:
+        # Degenerate spread (e.g. a converged model with near-constant scores):
+        # fall back to the full range so hist() gets monotonically increasing bins.
+        q_low, q_high = float(np.min(scores)), float(np.max(scores))
+        if q_high <= q_low:
+            q_low, q_high = q_low - 0.5, q_high + 0.5
     bins = np.linspace(q_low, q_high, 50)
     n_clipped = int(((scores < q_low) | (scores > q_high)).sum())
     logger.info(f"Anomaly histogram clips {n_clipped}/{len(scores)} scores outside 5-95%.")
-    
+
     plt.hist(bg_scores, bins=bins, alpha=0.6, color='blue', label='Standard Model Background', density=True)
     plt.hist(sig_scores, bins=bins, alpha=0.6, color='red', label='Higgs Signal', density=True)
     plt.xlabel('Anomaly Score')

@@ -201,7 +201,7 @@ To quickly validate the graph pipeline on your own machine, use the small synthe
 ```bash
 git clone https://github.com/ABHISHEK1139/CERN-AI-HEP.git
 cd CERN-AI-HEP
-pip install -r requirements.txt
+pip install -e ".[dev]"
 python experiments/train_classifier.py --config experiments/configs/smoke.yaml --model gcn --epochs 2 --device cpu
 ```
 
