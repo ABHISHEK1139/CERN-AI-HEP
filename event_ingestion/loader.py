@@ -12,6 +12,7 @@ Usage:
 """
 
 import logging
+import zipfile
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,71 @@ import numpy as np
 from event_ingestion.config import PARTICLE_FEATURES, EventConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_npz_archive(path: Path) -> None:
+    """Pre-screen an .npz before unpickling its object arrays.
+
+    Rejects files that are not plain zips of ``.npy`` entries (polyglot
+    archives, path-traversal entries) so an obviously malformed artifact
+    fails here instead of reaching the pickle machinery.
+    """
+    with zipfile.ZipFile(path) as zf:
+        entries = zf.infolist()
+        if not entries:
+            raise ValueError(f"{path} is an empty archive.")
+        for info in entries:
+            name = info.filename
+            if name.startswith("/") or ".." in name.split("/"):
+                raise ValueError(f"Unsafe entry in {path}: {name!r}")
+            if not name.endswith(".npy"):
+                raise ValueError(
+                    f"Unexpected entry in {path}: {name!r} (expected only .npy arrays)"
+                )
+
+
+def load_events_npz(path: str | Path) -> tuple[list[dict[str, Any]], np.ndarray | None]:
+    """Load events (and optional labels) from a synthetic .npz file.
+
+    The ``events`` array is an object array of event dicts, so ``allow_pickle``
+    is unavoidable here; the archive is pre-validated with
+    :func:`_validate_npz_archive` and the decoded content is type-checked
+    before it is returned.
+
+    Returns:
+        (events, labels): list of event dicts, and the labels array or None.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the archive is malformed or the content is unexpected.
+    """
+    filepath = Path(path)
+    if not filepath.exists():
+        raise FileNotFoundError(f"Synthetic file not found: {filepath}")
+    try:
+        _validate_npz_archive(filepath)
+        data = np.load(filepath, allow_pickle=True)
+    except Exception as e:
+        raise ValueError(f"Could not load {filepath}: {e}") from e
+    if "events" not in data:
+        raise KeyError(f"{filepath} has no 'events' array (keys: {list(data.keys())}).")
+    events = data["events"].tolist()
+    if not isinstance(events, list) or not all(
+        isinstance(ev, dict) for ev in events
+    ):
+        raise ValueError(
+            f"{filepath}: 'events' must be a list of event dicts, "
+            f"got {type(events).__name__}."
+        )
+    labels: np.ndarray | None = None
+    if "labels" in data:
+        labels = np.asarray(data["labels"])
+        if labels.dtype == object:
+            raise ValueError(
+                f"{filepath}: 'labels' must be a numeric array, "
+                f"got object dtype."
+            )
+    return events, labels
 
 
 class EventLoader:
@@ -242,13 +308,7 @@ class EventLoader:
             raise FileNotFoundError(f"Synthetic file not found: {filepath}")
         logger.info(f"Loading synthetic data: {filepath}")
 
-        try:
-            data = np.load(filepath, allow_pickle=True)
-        except Exception as e:
-            raise ValueError(f"Could not load {filepath}: {e}") from e
-        if "events" not in data:
-            raise KeyError(f"{filepath} has no 'events' array (keys: {list(data.keys())}).")
-        events = data["events"].tolist()
+        events, _ = load_events_npz(filepath)
 
         logger.info(f"Loaded {len(events)} synthetic events")
         return events

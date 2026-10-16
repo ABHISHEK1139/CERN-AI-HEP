@@ -63,7 +63,8 @@ def benchmark_pyg(sample_graphs, device, n_passes=100):
     # Load best checkpoint if available
     ckpt_path = Path("checkpoints/jetclass_autoencoder/jetclass_edgeconv_best.pt")
     if ckpt_path.exists():
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        # Only 'model_state_dict' (plain dict of tensors) is read.
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
         if "model_state_dict" in ckpt:
             model.load_state_dict(ckpt["model_state_dict"])
             logger.info("Loaded trained weights for PyG benchmark.")

@@ -22,7 +22,8 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 def plot_loss_curve(checkpoint_path, output_path):
-    ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    # Only 'history' (plain dict of lists) is read: weights_only=True.
+    ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
     history = ckpt.get('history', {})
     if not history or 'train_loss' not in history:
         logger.warning("No history found in checkpoint for loss curve.")

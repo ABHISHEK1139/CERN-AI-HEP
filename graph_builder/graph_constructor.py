@@ -90,9 +90,11 @@ class EventGraphConstructor:
         x = torch.tensor(x, dtype=torch.float32)
 
         # ---- Edge construction ----
-        if self.k <= 0:
-            raise ValueError(f"k must be >= 1 for kNN graphs, got k={self.k}.")
+        # (k is only meaningful for the knn strategy; fully_connected and
+        # delta_r ignore it, so the k>0 check lives in the knn branch.)
         if self.strategy == "knn":
+            if self.k <= 0:
+                raise ValueError(f"k must be >= 1 for kNN graphs, got k={self.k}.")
             edge_index = self._build_knn_edges(particles, min(self.k, n_particles - 1))
         elif self.strategy == "fully_connected":
             edge_index = self._build_fully_connected_edges(n_particles)
@@ -282,7 +284,7 @@ def main():
     parser.add_argument("--delta-r", type=float, default=1.5, help="ΔR threshold")
     args = parser.parse_args()
 
-    from event_ingestion.loader import EventLoader
+    from event_ingestion.loader import EventLoader, load_events_npz
 
     # Load events
     input_path = Path(args.input)
@@ -298,22 +300,29 @@ def main():
 
     all_events = []
     all_labels = []
+    root_seen = False
     for f in data_files:
         if f.suffix.lower() == ".npz":
-            data = np.load(f, allow_pickle=True)
-            if "events" not in data or "labels" not in data:
+            events, file_labels = load_events_npz(f)
+            if file_labels is None:
                 print(f"Skipping {f}: expected 'events'/'labels' arrays.")
                 continue
-            events = data["events"].tolist()
-            labels = data["labels"]
             all_events.extend(events)
-            all_labels.extend(labels)
+            all_labels.extend(file_labels)
         else:
+            # ROOT events carry no labels: leave data.y unset rather than
+            # fabricating class-0 labels that would pollute training/eval.
             events = loader.load_root(f)
             all_events.extend(events)
-            all_labels.extend([0] * len(events))  # unknown label
+            root_seen = True
 
-    labels = np.array(all_labels)
+    if root_seen:
+        if all_labels:
+            print("Warning: mixing labeled .npz with unlabeled .root files; "
+                  "dropping all labels instead of mislabeling ROOT events as class 0.")
+        labels = None
+    else:
+        labels = np.array(all_labels) if all_labels else None
 
     # Build graphs
     constructor = EventGraphConstructor(

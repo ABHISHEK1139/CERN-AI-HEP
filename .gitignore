@@ -40,6 +40,8 @@ results/
 mlruns/
 outputs/
 models/
+# ...but not the anomaly_engine source package
+!anomaly_engine/models/
 
 # Logs and scratch
 *.log

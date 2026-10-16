@@ -82,6 +82,7 @@ class JetClassIterableDataset(IterableDataset):
 
         logger.info(f"IterableDataset starting over {len(files)} files. Skipping {jets_to_skip} jets.")
 
+        file_errors = []
         for fpath in files:
             logger.info(f"  Streaming {fpath}...")
             try:
@@ -95,11 +96,19 @@ class JetClassIterableDataset(IterableDataset):
                     for arrays in tree.iterate(PARTICLE_FEATURES + LABEL_BRANCHES, step_size=self.chunk_size):
                         n_jets = len(arrays)
                         logger.debug(f"[Iterable] Read chunk of {n_jets} jets from {fpath}.")
-                        lengths = ak.to_numpy(ak.num(arrays["part_px"]))
+
+                        # Trim to max_particles by highest pT (pT = hypot(px, py);
+                        # original order kept among survivors), matching
+                        # JetClassDataset — not the first-N clip.
+                        pt = ak.hypot(arrays["part_px"], arrays["part_py"])
+                        order = ak.argsort(pt, axis=1, ascending=False)
+                        keep = ak.sort(order[:, : self.max_particles], axis=1)
+                        feats = {feat: arrays[feat][keep] for feat in PARTICLE_FEATURES}
+                        lengths = ak.to_numpy(ak.num(feats["part_px"]))
 
                         padded_feats = []
                         for feat in PARTICLE_FEATURES:
-                            padded = ak.fill_none(ak.pad_none(arrays[feat], self.max_particles, clip=True), 0.0)
+                            padded = ak.fill_none(ak.pad_none(feats[feat], self.max_particles, clip=True), 0.0)
                             padded_feats.append(ak.to_numpy(padded).astype(np.float32))
 
                         logger.debug(f"[Iterable] Stacking {len(PARTICLE_FEATURES)} features...")
@@ -139,4 +148,13 @@ class JetClassIterableDataset(IterableDataset):
 
             except Exception as e:
                 logger.error(f"Error reading {fpath}: {e}")
-                continue
+                file_errors.append((str(fpath), e))
+
+        if file_errors:
+            failed = "; ".join(
+                f"{p} ({type(e).__name__}: {e})" for p, e in file_errors
+            )
+            raise RuntimeError(
+                f"{len(file_errors)}/{len(files)} file(s) failed to stream: "
+                f"{failed}. Refusing to silently train on a partial dataset."
+            )

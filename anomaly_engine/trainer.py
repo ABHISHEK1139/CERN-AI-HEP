@@ -364,6 +364,18 @@ class Trainer:
                 if hasattr(train_loader.dataset, 'start_idx'):
                     bs = getattr(train_loader, 'batch_size', 1) or 1
                     train_loader.dataset.start_idx = start_batch * bs
+                elif isinstance(train_loader.dataset, IterableDataset):
+                    # The per-batch skip in _train_epoch_autoencoder explicitly
+                    # skips IterableDatasets (they advance via start_idx), so a
+                    # custom iterable without start_idx would silently replay
+                    # already-consumed batches instead of skipping them.
+                    raise RuntimeError(
+                        "Cannot resume mid-epoch: train_loader.dataset is an "
+                        f"IterableDataset ({type(train_loader.dataset).__name__}) "
+                        "without a 'start_idx' attribute. Add 'start_idx' "
+                        "support (see JetClassIterableDataset) or resume from "
+                        "an epoch boundary."
+                    )
 
         initial_epoch = start_epoch if start_batch > 0 else start_epoch + 1
 
@@ -554,7 +566,9 @@ class Trainer:
             return 0, 0
 
         try:
-            checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+            # Same plain-dict checkpoint format as _save_checkpoint:
+            # weights_only=True blocks arbitrary unpickling.
+            checkpoint = torch.load(path, map_location=self.device, weights_only=True)
         except Exception as exc:
             raise RuntimeError(f"Failed to read checkpoint {path}: {exc}") from exc
 

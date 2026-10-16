@@ -40,17 +40,22 @@ def preprocess_files(root_files, output_dir, max_particles=128, chunk_size=50000
                         print(f"  Skipping {out_file} (already exists)")
                         chunk_idx += 1
                         continue
-                    # NOTE: pad_none(..., clip=True) keeps the first `max_particles`
-                    # per jet. JetClass stores constituents pT-descending, so this
-                    # matches the dataset's highest-pT trim. Chunks are saved
-                    # dense [chunk, max_particles, 16].
+                    # Trim to max_particles by highest pT (pT = hypot(px, py);
+                    # original order kept among survivors), matching
+                    # JetClassDataset — a first-N clip would keep different
+                    # constituents for the same jet on this path.
 
                     n_jets = len(arrays)
-                    lengths = ak.to_numpy(ak.num(arrays["part_px"]))
+
+                    pt = ak.hypot(arrays["part_px"], arrays["part_py"])
+                    order = ak.argsort(pt, axis=1, ascending=False)
+                    keep = ak.sort(order[:, :max_particles], axis=1)
+                    feats = {feat: arrays[feat][keep] for feat in PARTICLE_FEATURES}
+                    lengths = ak.to_numpy(ak.num(feats["part_px"]))
 
                     padded_feats = []
                     for feat in PARTICLE_FEATURES:
-                        padded = ak.fill_none(ak.pad_none(arrays[feat], max_particles, clip=True), 0.0)
+                        padded = ak.fill_none(ak.pad_none(feats[feat], max_particles, clip=True), 0.0)
                         padded_feats.append(ak.to_numpy(padded).astype(np.float32))
 
                     node_feats_all = np.stack(padded_feats, axis=-1)

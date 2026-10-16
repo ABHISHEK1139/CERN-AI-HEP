@@ -74,15 +74,19 @@ def get_encoder(name: str, **kwargs: Any):
 def get_autoencoder(encoder_name: str, **kwargs: Any) -> GraphAutoencoder:
     """Build a :class:`GraphAutoencoder` with the named encoder.
 
-    Every keyword is forwarded to the encoder. ``latent_dim``, ``hidden_dim``
-    and ``input_dim`` are additionally read for the decoder so the two halves
-    always agree; pass the same values to both by leaving them in ``kwargs``.
+    Every keyword is forwarded to the encoder. ``latent_dim`` and
+    ``hidden_dim`` are additionally read for the decoder so the two halves
+    always agree; the decoder's ``output_dim`` is taken from the instantiated
+    encoder's ``input_dim`` (falling back to ``input_dim`` in kwargs, default
+    11) so encoders with different defaults (e.g. edgeconv, 16) wire up
+    without a dimension mismatch.
 
     Args:
         encoder_name: Key of :data:`ENCODERS`.
         **kwargs: Encoder keyword arguments. Recognized decoder-shared keys:
-            ``input_dim`` (default 11), ``hidden_dim`` (default 64),
-            ``latent_dim`` (default 32), and ``norm`` (default 'batch').
+            ``input_dim`` (default 11, or the encoder's own default),
+            ``hidden_dim`` (default 64), ``latent_dim`` (default 32), and
+            ``norm`` (default 'batch').
 
     Returns:
         A wired-up :class:`GraphAutoencoder`.
@@ -110,10 +114,12 @@ def get_autoencoder(encoder_name: str, **kwargs: Any) -> GraphAutoencoder:
             raise ValueError(f"{name} must be a positive int, got {value!r}.")
 
     encoder = get_encoder(encoder_name, **kwargs)
+    # Decoder output must match the encoder's actual input dim, not just the
+    # kwargs default (EdgeConvEncoder defaults to 16, not 11).
     decoder = GraphDecoder(
         latent_dim=latent_dim,
         hidden_dim=hidden_dim,
-        output_dim=input_dim,
+        output_dim=getattr(encoder, "input_dim", input_dim),
         norm=norm,
     )
     return GraphAutoencoder(encoder, decoder)

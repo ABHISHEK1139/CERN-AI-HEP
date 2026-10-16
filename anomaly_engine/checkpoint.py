@@ -69,7 +69,9 @@ def load_checkpoint(
         return {}
 
     try:
-        ckpt = torch.load(p, map_location=device, weights_only=False)
+        # Checkpoints hold only plain containers (dict/list) of tensors,
+        # ints and floats — weights_only=True blocks arbitrary unpickling.
+        ckpt = torch.load(p, map_location=device, weights_only=True)
     except Exception as exc:
         raise ValueError(f"Could not read checkpoint {p}: {exc}") from exc
 
