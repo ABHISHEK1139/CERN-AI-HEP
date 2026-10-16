@@ -42,6 +42,7 @@ class PhysicsNeMoWrapper(nn.Module):
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
+        self.dropout = dropout
         self.use_physicsnemo = use_physicsnemo
 
         self._physicsnemo_available = False
@@ -209,9 +210,18 @@ class PhysicsNeMoWrapper(nn.Module):
                     "fallback for the rest of this run.", type(e).__name__, e,
                 )
                 self._physicsnemo_available = False
+                # Drop any partially built submodules so the fallback owns the
+                # whole state_dict (otherwise load_state_dict sees extra
+                # keys), and keep the constructor's dropout instead of a
+                # hardcoded 0.0.
+                num_layers = len(getattr(self, "processors", [])) or 6
+                for attr in ("mesh_graph_net", "node_encoder", "edge_encoder",
+                             "processors", "node_decoder"):
+                    if hasattr(self, attr):
+                        delattr(self, attr)
                 self._init_fallback(
                     self.input_dim, self.hidden_dim, self.latent_dim,
-                    len(getattr(self, "processors", [])) or 6, 0.0,
+                    num_layers, self.dropout,
                 )
                 node_emb = self._fallback_forward(x, edge_index, edge_attr)
         else:

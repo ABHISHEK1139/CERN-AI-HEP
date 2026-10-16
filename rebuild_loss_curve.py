@@ -119,7 +119,8 @@ def find_checkpoint(explicit: str | None = None) -> Path | None:
 
 def losses_from_checkpoint(path: Path) -> list[float]:
     """Read ``history['train_loss']`` out of a checkpoint."""
-    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    # Only plain-dict history is read: weights_only=True.
+    ckpt = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(ckpt, dict):
         raise ValueError(f"Checkpoint {path} is a {type(ckpt).__name__}, expected a dict.")
     history = ckpt.get("history", {})
